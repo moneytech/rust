@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // compile-flags: -C no-prepopulate-passes
 
 #![crate_type = "lib"]
@@ -19,16 +9,21 @@ pub enum E {
 
 // CHECK-LABEL: @exhaustive_match
 #[no_mangle]
-pub fn exhaustive_match(e: E) {
+pub fn exhaustive_match(e: E) -> u8 {
 // CHECK: switch{{.*}}, label %[[OTHERWISE:[a-zA-Z0-9_]+]] [
-// CHECK-NEXT: i[[TY:[0-9]+]] [[DISCR:[0-9]+]], label %[[TRUE:[a-zA-Z0-9_]+]]
+// CHECK-NEXT: i[[TY:[0-9]+]] [[DISCR:[0-9]+]], label %[[A:[a-zA-Z0-9_]+]]
+// CHECK-NEXT: i[[TY:[0-9]+]] [[DISCR:[0-9]+]], label %[[B:[a-zA-Z0-9_]+]]
 // CHECK-NEXT: ]
-// CHECK: [[TRUE]]:
+// CHECK: [[B]]:
+// CHECK-NEXT: store i8 1, i8* %1, align 1
 // CHECK-NEXT: br label %[[EXIT:[a-zA-Z0-9_]+]]
 // CHECK: [[OTHERWISE]]:
+// CHECK-NEXT: unreachable
+// CHECK: [[A]]:
+// CHECK-NEXT: store i8 0, i8* %1, align 1
 // CHECK-NEXT: br label %[[EXIT:[a-zA-Z0-9_]+]]
     match e {
-        E::A => (),
-        E::B => (),
+        E::A => 0,
+        E::B => 1,
     }
 }

@@ -1,34 +1,35 @@
 error: chained comparison operators require parentheses
-  --> $DIR/issue-40396.rs:12:37
+  --> $DIR/issue-40396.rs:2:20
    |
-12 |     println!("{:?}", (0..13).collect<Vec<i32>>());
-   |                                     ^^^^^^^^
+LL |     (0..13).collect<Vec<i32>>();
+   |                    ^^^^^
    |
-   = help: use `::<...>` instead of `<...>` if you meant to specify type arguments
+help: use `::<...>` instead of `<...>` to specify type arguments
+   |
+LL |     (0..13).collect::<Vec<i32>>();
+   |                    ^^
 
 error: chained comparison operators require parentheses
-  --> $DIR/issue-40396.rs:16:25
+  --> $DIR/issue-40396.rs:4:8
    |
-16 |     println!("{:?}", Vec<i32>::new());
-   |                         ^^^^^^^
+LL |     Vec<i32>::new();
+   |        ^^^^^
    |
-   = help: use `::<...>` instead of `<...>` if you meant to specify type arguments
+help: use `::<...>` instead of `<...>` to specify type arguments
+   |
+LL |     Vec::<i32>::new();
+   |        ^^
 
 error: chained comparison operators require parentheses
-  --> $DIR/issue-40396.rs:20:37
+  --> $DIR/issue-40396.rs:6:20
    |
-20 |     println!("{:?}", (0..13).collect<Vec<i32>());
-   |                                     ^^^^^^^^
+LL |     (0..13).collect<Vec<i32>();
+   |                    ^^^^^
    |
-   = help: use `::<...>` instead of `<...>` if you meant to specify type arguments
+help: use `::<...>` instead of `<...>` to specify type arguments
+   |
+LL |     (0..13).collect::<Vec<i32>();
+   |                    ^^
 
-error: chained comparison operators require parentheses
-  --> $DIR/issue-40396.rs:20:41
-   |
-20 |     println!("{:?}", (0..13).collect<Vec<i32>());
-   |                                         ^^^^^^
-   |
-   = help: use `::<...>` instead of `<...>` if you meant to specify type arguments
-
-error: aborting due to previous error(s)
+error: aborting due to 3 previous errors
 

@@ -1,111 +1,103 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// Detecting language items.
-//
-// Language items are items that represent concepts intrinsic to the language
-// itself. Examples are:
-//
-// * Traits that specify "kinds"; e.g. "Sync", "Send".
-//
-// * Traits that represent operators; e.g. "Add", "Sub", "Index".
-//
-// * Functions called by the compiler itself.
+//! Detecting language items.
+//!
+//! Language items are items that represent concepts intrinsic to the language
+//! itself. Examples are:
+//!
+//! * Traits that specify "kinds"; e.g., `Sync`, `Send`.
+//! * Traits that represent operators; e.g., `Add`, `Sub`, `Index`.
+//! * Functions called by the compiler itself.
 
 pub use self::LangItem::*;
 
-use hir::map as hir_map;
-use session::Session;
-use hir::def_id::DefId;
-use ty;
-use middle::weak_lang_items;
-use util::nodemap::FxHashMap;
+use crate::hir::check_attr::Target;
+use crate::hir::def_id::DefId;
+use crate::middle::cstore::ExternCrate;
+use crate::middle::weak_lang_items;
+use crate::ty::{self, TyCtxt};
+use crate::util::nodemap::FxHashMap;
 
+use crate::hir;
+use crate::hir::itemlikevisit::ItemLikeVisitor;
+use rustc_macros::HashStable;
+use rustc_span::symbol::{sym, Symbol};
+use rustc_span::Span;
 use syntax::ast;
-use syntax::symbol::Symbol;
-use hir::itemlikevisit::ItemLikeVisitor;
-use hir;
+
+use rustc_error_codes::*;
 
 // The actual lang items defined come at the end of this file in one handy table.
 // So you probably just want to nip down to the end.
 macro_rules! language_item_table {
     (
-        $( $variant:ident, $name:expr, $method:ident; )*
+        $( $variant:ident, $name:expr, $method:ident, $target:path; )*
     ) => {
 
-
 enum_from_u32! {
-    #[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
+    /// A representation of all the valid language items in Rust.
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable)]
     pub enum LangItem {
         $($variant,)*
     }
 }
 
+impl LangItem {
+    /// Returns the `name` in `#[lang = "$name"]`.
+    /// For example, `LangItem::EqTraitLangItem`,
+    /// that is `#[lang = "eq"]` would result in `"eq"`.
+    fn name(self) -> &'static str {
+        match self {
+            $( $variant => $name, )*
+        }
+    }
+}
+
+#[derive(HashStable)]
 pub struct LanguageItems {
+    /// Mappings from lang items to their possibly found `DefId`s.
+    /// The index corresponds to the order in `LangItem`.
     pub items: Vec<Option<DefId>>,
+    /// Lang items that were not found during collection.
     pub missing: Vec<LangItem>,
 }
 
 impl LanguageItems {
-    pub fn new() -> LanguageItems {
-        fn foo(_: LangItem) -> Option<DefId> { None }
+    /// Construct an empty collection of lang items and no missing ones.
+    pub fn new() -> Self {
+        fn init_none(_: LangItem) -> Option<DefId> { None }
 
-        LanguageItems {
-            items: vec![$(foo($variant)),*],
+        Self {
+            items: vec![$(init_none($variant)),*],
             missing: Vec::new(),
         }
     }
 
+    /// Returns the mappings to the possibly found `DefId`s for each lang item.
     pub fn items(&self) -> &[Option<DefId>] {
         &*self.items
     }
 
-    pub fn item_name(index: usize) -> &'static str {
-        let item: Option<LangItem> = LangItem::from_u32(index as u32);
-        match item {
-            $( Some($variant) => $name, )*
-            None => "???"
-        }
-    }
-
+    /// Requires that a given `LangItem` was bound and returns the corresponding `DefId`.
+    /// If it wasn't bound, e.g. due to a missing `#[lang = "<it.name()>"]`,
+    /// returns an error message as a string.
     pub fn require(&self, it: LangItem) -> Result<DefId, String> {
-        match self.items[it as usize] {
-            Some(id) => Ok(id),
-            None => {
-                Err(format!("requires `{}` lang_item",
-                            LanguageItems::item_name(it as usize)))
-            }
-        }
+        self.items[it as usize].ok_or_else(|| format!("requires `{}` lang_item", it.name()))
     }
 
-    pub fn require_owned_box(&self) -> Result<DefId, String> {
-        self.require(OwnedBoxLangItem)
-    }
-
+    /// Returns the kind of closure that `id`, which is one of the `Fn*` traits, corresponds to.
+    /// If `id` is not one of the `Fn*` traits, `None` is returned.
     pub fn fn_trait_kind(&self, id: DefId) -> Option<ty::ClosureKind> {
-        let def_id_kinds = [
-            (self.fn_trait(), ty::ClosureKind::Fn),
-            (self.fn_mut_trait(), ty::ClosureKind::FnMut),
-            (self.fn_once_trait(), ty::ClosureKind::FnOnce),
-            ];
-
-        for &(opt_def_id, kind) in &def_id_kinds {
-            if Some(id) == opt_def_id {
-                return Some(kind);
-            }
+        match Some(id) {
+            x if x == self.fn_trait() => Some(ty::ClosureKind::Fn),
+            x if x == self.fn_mut_trait() => Some(ty::ClosureKind::FnMut),
+            x if x == self.fn_once_trait() => Some(ty::ClosureKind::FnOnce),
+            _ => None
         }
-
-        None
     }
 
     $(
+        /// Returns the corresponding `DefId` for the lang item
+        #[doc = $name]
+        /// if it exists.
         #[allow(dead_code)]
         pub fn $method(&self) -> Option<DefId> {
             self.items[$variant as usize]
@@ -113,134 +105,162 @@ impl LanguageItems {
     )*
 }
 
-struct LanguageItemCollector<'a, 'tcx: 'a> {
+struct LanguageItemCollector<'tcx> {
     items: LanguageItems,
-
-    hir_map: &'a hir_map::Map<'tcx>,
-
-    session: &'a Session,
-
-    item_refs: FxHashMap<&'static str, usize>,
+    tcx: TyCtxt<'tcx>,
+    /// A mapping from the name of the lang item to its order and the form it must be of.
+    item_refs: FxHashMap<&'static str, (usize, Target)>,
 }
 
-impl<'a, 'v, 'tcx> ItemLikeVisitor<'v> for LanguageItemCollector<'a, 'tcx> {
-    fn visit_item(&mut self, item: &hir::Item) {
-        if let Some(value) = extract(&item.attrs) {
-            let item_index = self.item_refs.get(&*value.as_str()).cloned();
-
-            if let Some(item_index) = item_index {
-                self.collect_item(item_index, self.hir_map.local_def_id(item.id))
-            } else {
-                let span = self.hir_map.span(item.id);
-                span_err!(self.session, span, E0522,
-                          "definition of an unknown language item: `{}`.",
-                          value);
+impl ItemLikeVisitor<'v> for LanguageItemCollector<'tcx> {
+    fn visit_item(&mut self, item: &hir::Item<'_>) {
+        if let Some((value, span)) = extract(&item.attrs) {
+            let actual_target = Target::from_item(item);
+            match self.item_refs.get(&*value.as_str()).cloned() {
+                // Known lang item with attribute on correct target.
+                Some((item_index, expected_target)) if actual_target == expected_target => {
+                    let def_id = self.tcx.hir().local_def_id(item.hir_id);
+                    self.collect_item(item_index, def_id);
+                },
+                // Known lang item with attribute on incorrect target.
+                Some((_, expected_target)) => {
+                    struct_span_err!(
+                        self.tcx.sess, span, E0718,
+                        "`{}` language item must be applied to a {}",
+                        value, expected_target,
+                    ).span_label(
+                        span,
+                        format!(
+                            "attribute should be applied to a {}, not a {}",
+                            expected_target, actual_target,
+                        ),
+                    ).emit();
+                },
+                // Unknown lang item.
+                _ => {
+                    struct_span_err!(
+                        self.tcx.sess, span, E0522,
+                        "definition of an unknown language item: `{}`",
+                        value
+                    ).span_label(
+                        span,
+                        format!("definition of unknown language item `{}`", value)
+                    ).emit();
+                },
             }
         }
     }
 
-    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem) {
-        // at present, lang items are always items, not trait items
+    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'_>) {
+        // At present, lang items are always items, not trait items.
     }
 
-    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem) {
-        // at present, lang items are always items, not impl items
+    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'_>) {
+        // At present, lang items are always items, not impl items.
     }
 }
 
-impl<'a, 'tcx> LanguageItemCollector<'a, 'tcx> {
-    pub fn new(session: &'a Session, hir_map: &'a hir_map::Map<'tcx>)
-               -> LanguageItemCollector<'a, 'tcx> {
-        let mut item_refs = FxHashMap();
+impl LanguageItemCollector<'tcx> {
+    fn new(tcx: TyCtxt<'tcx>) -> LanguageItemCollector<'tcx> {
+        let mut item_refs = FxHashMap::default();
 
-        $( item_refs.insert($name, $variant as usize); )*
+        $( item_refs.insert($name, ($variant as usize, $target)); )*
 
         LanguageItemCollector {
-            session: session,
-            hir_map: hir_map,
+            tcx,
             items: LanguageItems::new(),
-            item_refs: item_refs,
+            item_refs,
         }
     }
 
-    pub fn collect_item(&mut self, item_index: usize,
-                        item_def_id: DefId) {
+    fn collect_item(&mut self, item_index: usize, item_def_id: DefId) {
         // Check for duplicates.
-        match self.items.items[item_index] {
-            Some(original_def_id) if original_def_id != item_def_id => {
-                let cstore = &self.session.cstore;
-                let name = LanguageItems::item_name(item_index);
-                let mut err = match self.hir_map.span_if_local(item_def_id) {
+        if let Some(original_def_id) = self.items.items[item_index] {
+            if original_def_id != item_def_id {
+                let name = LangItem::from_u32(item_index as u32).unwrap().name();
+                let mut err = match self.tcx.hir().span_if_local(item_def_id) {
                     Some(span) => struct_span_err!(
-                        self.session,
+                        self.tcx.sess,
                         span,
                         E0152,
                         "duplicate lang item found: `{}`.",
                         name),
-                    None => self.session.struct_err(&format!(
-                            "duplicate lang item in crate `{}`: `{}`.",
-                            cstore.crate_name(item_def_id.krate),
-                            name)),
+                    None => {
+                        match self.tcx.extern_crate(item_def_id) {
+                            Some(ExternCrate {dependency_of, ..}) => {
+                                self.tcx.sess.struct_err(&format!(
+                                "duplicate lang item in crate `{}` (which `{}` depends on): `{}`.",
+                                self.tcx.crate_name(item_def_id.krate),
+                                self.tcx.crate_name(*dependency_of),
+                                name))
+                            },
+                            _ => {
+                                self.tcx.sess.struct_err(&format!(
+                                "duplicate lang item in crate `{}`: `{}`.",
+                                self.tcx.crate_name(item_def_id.krate),
+                                name))
+                            }
+                        }
+                    },
                 };
-                if let Some(span) = self.hir_map.span_if_local(original_def_id) {
-                    span_note!(&mut err, span,
-                               "first defined here.");
+                if let Some(span) = self.tcx.hir().span_if_local(original_def_id) {
+                    span_note!(&mut err, span, "first defined here.");
                 } else {
-                    err.note(&format!("first defined in crate `{}`.",
-                                      cstore.crate_name(original_def_id.krate)));
+                    match self.tcx.extern_crate(original_def_id) {
+                        Some(ExternCrate {dependency_of, ..}) => {
+                            err.note(&format!(
+                            "first defined in crate `{}` (which `{}` depends on).",
+                                      self.tcx.crate_name(original_def_id.krate),
+                                      self.tcx.crate_name(*dependency_of)));
+                        },
+                        _ => {
+                            err.note(&format!("first defined in crate `{}`.",
+                                      self.tcx.crate_name(original_def_id.krate)));
+                        }
+                    }
                 }
                 err.emit();
-            }
-            _ => {
-                // OK.
             }
         }
 
         // Matched.
         self.items.items[item_index] = Some(item_def_id);
     }
+}
 
-    pub fn collect_local_language_items(&mut self, krate: &hir::Crate) {
-        krate.visit_all_item_likes(self);
-    }
+/// Extracts the first `lang = "$name"` out of a list of attributes.
+/// The attributes `#[panic_handler]` and `#[alloc_error_handler]`
+/// are also extracted out when found.
+pub fn extract(attrs: &[ast::Attribute]) -> Option<(Symbol, Span)> {
+    attrs.iter().find_map(|attr| Some(match attr {
+        _ if attr.check_name(sym::lang) => (attr.value_str()?, attr.span),
+        _ if attr.check_name(sym::panic_handler) => (sym::panic_impl, attr.span),
+        _ if attr.check_name(sym::alloc_error_handler) => (sym::oom, attr.span),
+        _ => return None,
+    }))
+}
 
-    pub fn collect_external_language_items(&mut self) {
-        let cstore = &self.session.cstore;
+/// Traverses and collects all the lang items in all crates.
+pub fn collect<'tcx>(tcx: TyCtxt<'tcx>) -> LanguageItems {
+    // Initialize the collector.
+    let mut collector = LanguageItemCollector::new(tcx);
 
-        for cnum in cstore.crates() {
-            for (index, item_index) in cstore.lang_items(cnum) {
-                let def_id = DefId { krate: cnum, index: index };
-                self.collect_item(item_index, def_id);
-            }
+    // Collect lang items in other crates.
+    for &cnum in tcx.crates().iter() {
+        for &(def_id, item_index) in tcx.defined_lang_items(cnum).iter() {
+            collector.collect_item(item_index, def_id);
         }
     }
 
-    pub fn collect(&mut self, krate: &hir::Crate) {
-        self.collect_external_language_items();
-        self.collect_local_language_items(krate);
-    }
-}
+    // Collect lang items in this crate.
+    tcx.hir().krate().visit_all_item_likes(&mut collector);
 
-pub fn extract(attrs: &[ast::Attribute]) -> Option<Symbol> {
-    for attribute in attrs {
-        if attribute.check_name("lang") {
-            if let Some(value) = attribute.value_str() {
-                return Some(value)
-            }
-        }
-    }
-
-    return None;
-}
-
-pub fn collect_language_items(session: &Session,
-                              map: &hir_map::Map)
-                              -> LanguageItems {
-    let krate: &hir::Crate = map.krate();
-    let mut collector = LanguageItemCollector::new(session, map);
-    collector.collect(krate);
+    // Extract out the found lang items.
     let LanguageItemCollector { mut items, .. } = collector;
-    weak_lang_items::check_crate(krate, session, &mut items);
+
+    // Find all required but not-yet-defined lang items.
+    weak_lang_items::check_crate(tcx, &mut items);
+
     items
 }
 
@@ -249,76 +269,95 @@ pub fn collect_language_items(session: &Session,
 }
 
 language_item_table! {
-//  Variant name,                    Name,                      Method name;
-    CharImplItem,                    "char",                    char_impl;
-    StrImplItem,                     "str",                     str_impl;
-    SliceImplItem,                   "slice",                   slice_impl;
-    ConstPtrImplItem,                "const_ptr",               const_ptr_impl;
-    MutPtrImplItem,                  "mut_ptr",                 mut_ptr_impl;
-    I8ImplItem,                      "i8",                      i8_impl;
-    I16ImplItem,                     "i16",                     i16_impl;
-    I32ImplItem,                     "i32",                     i32_impl;
-    I64ImplItem,                     "i64",                     i64_impl;
-    I128ImplItem,                     "i128",                   i128_impl;
-    IsizeImplItem,                   "isize",                   isize_impl;
-    U8ImplItem,                      "u8",                      u8_impl;
-    U16ImplItem,                     "u16",                     u16_impl;
-    U32ImplItem,                     "u32",                     u32_impl;
-    U64ImplItem,                     "u64",                     u64_impl;
-    U128ImplItem,                    "u128",                    u128_impl;
-    UsizeImplItem,                   "usize",                   usize_impl;
-    F32ImplItem,                     "f32",                     f32_impl;
-    F64ImplItem,                     "f64",                     f64_impl;
+//  Variant name,                Name,                 Method name,             Target;
+    BoolImplItem,                "bool",               bool_impl,               Target::Impl;
+    CharImplItem,                "char",               char_impl,               Target::Impl;
+    StrImplItem,                 "str",                str_impl,                Target::Impl;
+    SliceImplItem,               "slice",              slice_impl,              Target::Impl;
+    SliceU8ImplItem,             "slice_u8",           slice_u8_impl,           Target::Impl;
+    StrAllocImplItem,            "str_alloc",          str_alloc_impl,          Target::Impl;
+    SliceAllocImplItem,          "slice_alloc",        slice_alloc_impl,        Target::Impl;
+    SliceU8AllocImplItem,        "slice_u8_alloc",     slice_u8_alloc_impl,     Target::Impl;
+    ConstPtrImplItem,            "const_ptr",          const_ptr_impl,          Target::Impl;
+    MutPtrImplItem,              "mut_ptr",            mut_ptr_impl,            Target::Impl;
+    I8ImplItem,                  "i8",                 i8_impl,                 Target::Impl;
+    I16ImplItem,                 "i16",                i16_impl,                Target::Impl;
+    I32ImplItem,                 "i32",                i32_impl,                Target::Impl;
+    I64ImplItem,                 "i64",                i64_impl,                Target::Impl;
+    I128ImplItem,                "i128",               i128_impl,               Target::Impl;
+    IsizeImplItem,               "isize",              isize_impl,              Target::Impl;
+    U8ImplItem,                  "u8",                 u8_impl,                 Target::Impl;
+    U16ImplItem,                 "u16",                u16_impl,                Target::Impl;
+    U32ImplItem,                 "u32",                u32_impl,                Target::Impl;
+    U64ImplItem,                 "u64",                u64_impl,                Target::Impl;
+    U128ImplItem,                "u128",               u128_impl,               Target::Impl;
+    UsizeImplItem,               "usize",              usize_impl,              Target::Impl;
+    F32ImplItem,                 "f32",                f32_impl,                Target::Impl;
+    F64ImplItem,                 "f64",                f64_impl,                Target::Impl;
+    F32RuntimeImplItem,          "f32_runtime",        f32_runtime_impl,        Target::Impl;
+    F64RuntimeImplItem,          "f64_runtime",        f64_runtime_impl,        Target::Impl;
 
-    SendTraitLangItem,               "send",                    send_trait;
-    SizedTraitLangItem,              "sized",                   sized_trait;
-    UnsizeTraitLangItem,             "unsize",                  unsize_trait;
-    CopyTraitLangItem,               "copy",                    copy_trait;
-    SyncTraitLangItem,               "sync",                    sync_trait;
-    FreezeTraitLangItem,             "freeze",                  freeze_trait;
+    SizedTraitLangItem,          "sized",              sized_trait,             Target::Trait;
+    UnsizeTraitLangItem,         "unsize",             unsize_trait,            Target::Trait;
+    // trait injected by #[derive(PartialEq)], (i.e. "Partial EQ").
+    StructuralPeqTraitLangItem,  "structural_peq",     structural_peq_trait,    Target::Trait;
+    // trait injected by #[derive(Eq)], (i.e. "Total EQ"; no, I will not apologize).
+    StructuralTeqTraitLangItem,  "structural_teq",     structural_teq_trait,    Target::Trait;
+    CopyTraitLangItem,           "copy",               copy_trait,              Target::Trait;
+    CloneTraitLangItem,          "clone",              clone_trait,             Target::Trait;
+    SyncTraitLangItem,           "sync",               sync_trait,              Target::Trait;
+    FreezeTraitLangItem,         "freeze",             freeze_trait,            Target::Trait;
 
-    DropTraitLangItem,               "drop",                    drop_trait;
+    DropTraitLangItem,           "drop",               drop_trait,              Target::Trait;
 
-    CoerceUnsizedTraitLangItem,      "coerce_unsized",          coerce_unsized_trait;
+    CoerceUnsizedTraitLangItem,  "coerce_unsized",     coerce_unsized_trait,    Target::Trait;
+    DispatchFromDynTraitLangItem,"dispatch_from_dyn",  dispatch_from_dyn_trait, Target::Trait;
 
-    AddTraitLangItem,                "add",                     add_trait;
-    SubTraitLangItem,                "sub",                     sub_trait;
-    MulTraitLangItem,                "mul",                     mul_trait;
-    DivTraitLangItem,                "div",                     div_trait;
-    RemTraitLangItem,                "rem",                     rem_trait;
-    NegTraitLangItem,                "neg",                     neg_trait;
-    NotTraitLangItem,                "not",                     not_trait;
-    BitXorTraitLangItem,             "bitxor",                  bitxor_trait;
-    BitAndTraitLangItem,             "bitand",                  bitand_trait;
-    BitOrTraitLangItem,              "bitor",                   bitor_trait;
-    ShlTraitLangItem,                "shl",                     shl_trait;
-    ShrTraitLangItem,                "shr",                     shr_trait;
-    AddAssignTraitLangItem,          "add_assign",              add_assign_trait;
-    SubAssignTraitLangItem,          "sub_assign",              sub_assign_trait;
-    MulAssignTraitLangItem,          "mul_assign",              mul_assign_trait;
-    DivAssignTraitLangItem,          "div_assign",              div_assign_trait;
-    RemAssignTraitLangItem,          "rem_assign",              rem_assign_trait;
-    BitXorAssignTraitLangItem,       "bitxor_assign",           bitxor_assign_trait;
-    BitAndAssignTraitLangItem,       "bitand_assign",           bitand_assign_trait;
-    BitOrAssignTraitLangItem,        "bitor_assign",            bitor_assign_trait;
-    ShlAssignTraitLangItem,          "shl_assign",              shl_assign_trait;
-    ShrAssignTraitLangItem,          "shr_assign",              shr_assign_trait;
-    IndexTraitLangItem,              "index",                   index_trait;
-    IndexMutTraitLangItem,           "index_mut",               index_mut_trait;
+    AddTraitLangItem,            "add",                add_trait,               Target::Trait;
+    SubTraitLangItem,            "sub",                sub_trait,               Target::Trait;
+    MulTraitLangItem,            "mul",                mul_trait,               Target::Trait;
+    DivTraitLangItem,            "div",                div_trait,               Target::Trait;
+    RemTraitLangItem,            "rem",                rem_trait,               Target::Trait;
+    NegTraitLangItem,            "neg",                neg_trait,               Target::Trait;
+    NotTraitLangItem,            "not",                not_trait,               Target::Trait;
+    BitXorTraitLangItem,         "bitxor",             bitxor_trait,            Target::Trait;
+    BitAndTraitLangItem,         "bitand",             bitand_trait,            Target::Trait;
+    BitOrTraitLangItem,          "bitor",              bitor_trait,             Target::Trait;
+    ShlTraitLangItem,            "shl",                shl_trait,               Target::Trait;
+    ShrTraitLangItem,            "shr",                shr_trait,               Target::Trait;
+    AddAssignTraitLangItem,      "add_assign",         add_assign_trait,        Target::Trait;
+    SubAssignTraitLangItem,      "sub_assign",         sub_assign_trait,        Target::Trait;
+    MulAssignTraitLangItem,      "mul_assign",         mul_assign_trait,        Target::Trait;
+    DivAssignTraitLangItem,      "div_assign",         div_assign_trait,        Target::Trait;
+    RemAssignTraitLangItem,      "rem_assign",         rem_assign_trait,        Target::Trait;
+    BitXorAssignTraitLangItem,   "bitxor_assign",      bitxor_assign_trait,     Target::Trait;
+    BitAndAssignTraitLangItem,   "bitand_assign",      bitand_assign_trait,     Target::Trait;
+    BitOrAssignTraitLangItem,    "bitor_assign",       bitor_assign_trait,      Target::Trait;
+    ShlAssignTraitLangItem,      "shl_assign",         shl_assign_trait,        Target::Trait;
+    ShrAssignTraitLangItem,      "shr_assign",         shr_assign_trait,        Target::Trait;
+    IndexTraitLangItem,          "index",              index_trait,             Target::Trait;
+    IndexMutTraitLangItem,       "index_mut",          index_mut_trait,         Target::Trait;
 
-    UnsafeCellTypeLangItem,          "unsafe_cell",             unsafe_cell_type;
+    UnsafeCellTypeLangItem,      "unsafe_cell",        unsafe_cell_type,        Target::Struct;
+    VaListTypeLangItem,          "va_list",            va_list,                 Target::Struct;
 
-    DerefTraitLangItem,              "deref",                   deref_trait;
-    DerefMutTraitLangItem,           "deref_mut",               deref_mut_trait;
+    DerefTraitLangItem,          "deref",              deref_trait,             Target::Trait;
+    DerefMutTraitLangItem,       "deref_mut",          deref_mut_trait,         Target::Trait;
+    ReceiverTraitLangItem,       "receiver",           receiver_trait,          Target::Trait;
 
-    FnTraitLangItem,                 "fn",                      fn_trait;
-    FnMutTraitLangItem,              "fn_mut",                  fn_mut_trait;
-    FnOnceTraitLangItem,             "fn_once",                 fn_once_trait;
+    FnTraitLangItem,             "fn",                 fn_trait,                Target::Trait;
+    FnMutTraitLangItem,          "fn_mut",             fn_mut_trait,            Target::Trait;
+    FnOnceTraitLangItem,         "fn_once",            fn_once_trait,           Target::Trait;
 
-    EqTraitLangItem,                 "eq",                      eq_trait;
-    OrdTraitLangItem,                "ord",                     ord_trait;
+    FutureTraitLangItem,         "future_trait",       future_trait,            Target::Trait;
+    GeneratorStateLangItem,      "generator_state",    gen_state,               Target::Enum;
+    GeneratorTraitLangItem,      "generator",          gen_trait,               Target::Trait;
+    UnpinTraitLangItem,          "unpin",              unpin_trait,             Target::Trait;
+    PinTypeLangItem,             "pin",                pin_type,                Target::Struct;
 
-    StrEqFnLangItem,                 "str_eq",                  str_eq_fn;
+    // Don't be fooled by the naming here: this lang item denotes `PartialEq`, not `Eq`.
+    EqTraitLangItem,             "eq",                 eq_trait,                Target::Trait;
+    PartialOrdTraitLangItem,     "partial_ord",        partial_ord_trait,       Target::Trait;
 
     // A number of panic-related lang items. The `panic` item corresponds to
     // divide-by-zero and various panic cases with `match`. The
@@ -329,41 +368,53 @@ language_item_table! {
     // defined to use it, but a final product is required to define it
     // somewhere. Additionally, there are restrictions on crates that use a weak
     // lang item, but do not have it defined.
-    PanicFnLangItem,                 "panic",                   panic_fn;
-    PanicBoundsCheckFnLangItem,      "panic_bounds_check",      panic_bounds_check_fn;
-    PanicFmtLangItem,                "panic_fmt",               panic_fmt;
+    PanicFnLangItem,             "panic",              panic_fn,                Target::Fn;
+    PanicBoundsCheckFnLangItem,  "panic_bounds_check", panic_bounds_check_fn,   Target::Fn;
+    PanicInfoLangItem,           "panic_info",         panic_info,              Target::Struct;
+    PanicLocationLangItem,       "panic_location",     panic_location,          Target::Struct;
+    PanicImplLangItem,           "panic_impl",         panic_impl,              Target::Fn;
+    // Libstd panic entry point. Necessary for const eval to be able to catch it
+    BeginPanicFnLangItem,        "begin_panic",        begin_panic_fn,          Target::Fn;
 
-    ExchangeMallocFnLangItem,        "exchange_malloc",         exchange_malloc_fn;
-    BoxFreeFnLangItem,               "box_free",                box_free_fn;
-    DropInPlaceFnLangItem,             "drop_in_place",           drop_in_place_fn;
+    ExchangeMallocFnLangItem,    "exchange_malloc",    exchange_malloc_fn,      Target::Fn;
+    BoxFreeFnLangItem,           "box_free",           box_free_fn,             Target::Fn;
+    DropInPlaceFnLangItem,       "drop_in_place",      drop_in_place_fn,        Target::Fn;
+    OomLangItem,                 "oom",                oom,                     Target::Fn;
+    AllocLayoutLangItem,         "alloc_layout",       alloc_layout,            Target::Struct;
 
-    StartFnLangItem,                 "start",                   start_fn;
+    StartFnLangItem,             "start",              start_fn,                Target::Fn;
 
-    EhPersonalityLangItem,           "eh_personality",          eh_personality;
-    EhUnwindResumeLangItem,          "eh_unwind_resume",        eh_unwind_resume;
-    MSVCTryFilterLangItem,           "msvc_try_filter",         msvc_try_filter;
+    EhPersonalityLangItem,       "eh_personality",     eh_personality,          Target::Fn;
+    EhUnwindResumeLangItem,      "eh_unwind_resume",   eh_unwind_resume,        Target::Fn;
+    EhCatchTypeinfoLangItem,     "eh_catch_typeinfo",  eh_catch_typeinfo,       Target::Static;
 
-    OwnedBoxLangItem,                "owned_box",               owned_box;
+    OwnedBoxLangItem,            "owned_box",          owned_box,               Target::Struct;
 
-    PhantomDataItem,                 "phantom_data",            phantom_data;
+    PhantomDataItem,             "phantom_data",       phantom_data,            Target::Struct;
 
-    // Deprecated:
-    CovariantTypeItem,               "covariant_type",          covariant_type;
-    ContravariantTypeItem,           "contravariant_type",      contravariant_type;
-    InvariantTypeItem,               "invariant_type",          invariant_type;
-    CovariantLifetimeItem,           "covariant_lifetime",      covariant_lifetime;
-    ContravariantLifetimeItem,       "contravariant_lifetime",  contravariant_lifetime;
-    InvariantLifetimeItem,           "invariant_lifetime",      invariant_lifetime;
+    ManuallyDropItem,            "manually_drop",      manually_drop,           Target::Struct;
 
-    NonZeroItem,                     "non_zero",                non_zero;
+    MaybeUninitLangItem,         "maybe_uninit",       maybe_uninit,            Target::Union;
 
-    DebugTraitLangItem,              "debug_trait",             debug_trait;
+    // Align offset for stride != 1; must not panic.
+    AlignOffsetLangItem,         "align_offset",       align_offset_fn,         Target::Fn;
+
+    TerminationTraitLangItem,    "termination",        termination,             Target::Trait;
+
+    Arc,                         "arc",                arc,                     Target::Struct;
+    Rc,                          "rc",                 rc,                      Target::Struct;
 }
 
-impl<'a, 'tcx, 'gcx> ty::TyCtxt<'a, 'tcx, 'gcx> {
-    pub fn require_lang_item(&self, lang_item: LangItem) -> DefId {
-        self.lang_items.require(lang_item).unwrap_or_else(|msg| {
-            self.sess.fatal(&msg)
+impl<'tcx> TyCtxt<'tcx> {
+    /// Returns the `DefId` for a given `LangItem`.
+    /// If not found, fatally aborts compilation.
+    pub fn require_lang_item(&self, lang_item: LangItem, span: Option<Span>) -> DefId {
+        self.lang_items().require(lang_item).unwrap_or_else(|msg| {
+            if let Some(span) = span {
+                self.sess.span_fatal(span, &msg)
+            } else {
+                self.sess.fatal(&msg)
+            }
         })
     }
 }

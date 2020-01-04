@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Checking that `Vec<T>` cannot hide lifetimes within `T` when `T`
 // implements `Drop` and might access methods of values that have
 // since been deallocated.
@@ -23,7 +13,7 @@
 // conditions above to be satisfied, meaning that if the dropck is
 // sound, it should reject this code.
 
-#![feature(const_fn)]
+
 
 use std::cell::Cell;
 use id::Id;
@@ -125,10 +115,10 @@ fn f() {
     c1.v.push(CheckId(Cell::new(None)));
     c2.v.push(CheckId(Cell::new(None)));
     c1.v[0].v.set(Some(&c2));
+    //~^ ERROR `c2` does not live long enough
     c2.v[0].v.set(Some(&c1));
+    //~^ ERROR `c1` does not live long enough
 }
-//~^ ERROR `c2` does not live long enough
-//~| ERROR `c1` does not live long enough
 
 fn main() {
     f();

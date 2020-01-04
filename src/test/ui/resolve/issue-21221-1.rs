@@ -1,13 +1,3 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 mod mul1 {
     pub trait Mul {}
 }
@@ -51,11 +41,7 @@ struct Foo;
 //   help:   `std::ops::Mul`
 
 impl Mul for Foo {
-//~^ ERROR unresolved trait `Mul`
-//~| HELP possible candidates are found in other modules, you can import them into scope
-//~| HELP `mul1::Mul`
-//~| HELP `mul2::Mul`
-//~| HELP `std::ops::Mul`
+//~^ ERROR cannot find trait `Mul`
 }
 
 // BEFORE, we got:
@@ -70,24 +56,17 @@ impl Mul for Foo {
 //   help:   `mul4::Mul`
 //   help:   and 2 other candidates
 fn getMul() -> Mul {
-//~^ ERROR unresolved type `Mul`
-//~| HELP possible candidates are found in other modules, you can import them into scope
-//~| HELP `mul1::Mul`
-//~| HELP `mul2::Mul`
-//~| HELP `mul3::Mul`
-//~| HELP `mul4::Mul`
-//~| HELP and 2 other candidates
+//~^ ERROR cannot find type `Mul`
 }
 
 // Let's also test what happens if the trait doesn't exist:
 impl ThisTraitReallyDoesntExistInAnyModuleReally for Foo {
-//~^ ERROR unresolved trait `ThisTraitReallyDoesntExistInAnyModuleReally`
+//~^ ERROR cannot find trait `ThisTraitReallyDoesntExistInAnyModuleReally`
 }
 
 // Let's also test what happens if there's just one alternative:
 impl Div for Foo {
-//~^ ERROR unresolved trait `Div`
-//~| HELP `use std::ops::Div;`
+//~^ ERROR cannot find trait `Div`
 }
 
 fn main() {

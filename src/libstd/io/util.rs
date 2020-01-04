@@ -1,17 +1,8 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![allow(missing_copy_implementations)]
 
-use fmt;
-use io::{self, Read, Write, ErrorKind, BufRead};
+use crate::fmt;
+use crate::io::{self, BufRead, ErrorKind, Initializer, IoSlice, IoSliceMut, Read, Write};
+use crate::mem::MaybeUninit;
 
 /// Copies the entire contents of a reader into a writer.
 ///
@@ -21,6 +12,11 @@ use io::{self, Read, Write, ErrorKind, BufRead};
 ///
 /// On success, the total number of bytes that were copied from
 /// `reader` to `writer` is returned.
+///
+/// If you’re wanting to copy the contents of one file to another and you’re
+/// working with filesystem paths, see the [`fs::copy`] function.
+///
+/// [`fs::copy`]: ../fs/fn.copy.html
 ///
 /// # Errors
 ///
@@ -33,46 +29,61 @@ use io::{self, Read, Write, ErrorKind, BufRead};
 /// ```
 /// use std::io;
 ///
-/// # fn foo() -> io::Result<()> {
-/// let mut reader: &[u8] = b"hello";
-/// let mut writer: Vec<u8> = vec![];
+/// fn main() -> io::Result<()> {
+///     let mut reader: &[u8] = b"hello";
+///     let mut writer: Vec<u8> = vec![];
 ///
-/// io::copy(&mut reader, &mut writer)?;
+///     io::copy(&mut reader, &mut writer)?;
 ///
-/// assert_eq!(reader, &writer[..]);
-/// # Ok(())
-/// # }
+///     assert_eq!(&b"hello"[..], &writer[..]);
+///     Ok(())
+/// }
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub fn copy<R: ?Sized, W: ?Sized>(reader: &mut R, writer: &mut W) -> io::Result<u64>
-    where R: Read, W: Write
+where
+    R: Read,
+    W: Write,
 {
-    let mut buf = [0; super::DEFAULT_BUF_SIZE];
+    let mut buf = MaybeUninit::<[u8; super::DEFAULT_BUF_SIZE]>::uninit();
+    // FIXME(#53491): This is calling `get_mut` and `get_ref` on an uninitialized
+    // `MaybeUninit`. Revisit this once we decided whether that is valid or not.
+    // This is still technically undefined behavior due to creating a reference
+    // to uninitialized data, but within libstd we can rely on more guarantees
+    // than if this code were in an external lib.
+    unsafe {
+        reader.initializer().initialize(buf.get_mut());
+    }
+
     let mut written = 0;
     loop {
-        let len = match reader.read(&mut buf) {
+        let len = match reader.read(unsafe { buf.get_mut() }) {
             Ok(0) => return Ok(written),
             Ok(len) => len,
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
-        writer.write_all(&buf[..len])?;
+        writer.write_all(unsafe { &buf.get_ref()[..len] })?;
         written += len as u64;
     }
 }
 
 /// A reader which is always at EOF.
 ///
-/// This struct is generally created by calling [`empty`][empty]. Please see
-/// the documentation of `empty()` for more details.
+/// This struct is generally created by calling [`empty`]. Please see
+/// the documentation of [`empty()`][`empty`] for more details.
 ///
-/// [empty]: fn.empty.html
+/// [`empty`]: fn.empty.html
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct Empty { _priv: () }
+pub struct Empty {
+    _priv: (),
+}
 
 /// Constructs a new handle to an empty reader.
 ///
-/// All reads from the returned reader will return `Ok(0)`.
+/// All reads from the returned reader will return [`Ok`]`(0)`.
+///
+/// [`Ok`]: ../result/enum.Result.html#variant.Ok
 ///
 /// # Examples
 ///
@@ -86,21 +97,35 @@ pub struct Empty { _priv: () }
 /// assert!(buffer.is_empty());
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub fn empty() -> Empty { Empty { _priv: () } }
+pub fn empty() -> Empty {
+    Empty { _priv: () }
+}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Read for Empty {
-    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> { Ok(0) }
+    #[inline]
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        Ok(0)
+    }
+
+    #[inline]
+    unsafe fn initializer(&self) -> Initializer {
+        Initializer::nop()
+    }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
 impl BufRead for Empty {
-    fn fill_buf(&mut self) -> io::Result<&[u8]> { Ok(&[]) }
+    #[inline]
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        Ok(&[])
+    }
+    #[inline]
     fn consume(&mut self, _n: usize) {}
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Empty {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Empty { .. }")
     }
 }
@@ -112,7 +137,9 @@ impl fmt::Debug for Empty {
 ///
 /// [repeat]: fn.repeat.html
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct Repeat { byte: u8 }
+pub struct Repeat {
+    byte: u8,
+}
 
 /// Creates an instance of a reader that infinitely repeats one byte.
 ///
@@ -129,21 +156,38 @@ pub struct Repeat { byte: u8 }
 /// assert_eq!(buffer, [0b101, 0b101, 0b101]);
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub fn repeat(byte: u8) -> Repeat { Repeat { byte: byte } }
+pub fn repeat(byte: u8) -> Repeat {
+    Repeat { byte }
+}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Read for Repeat {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         for slot in &mut *buf {
             *slot = self.byte;
         }
         Ok(buf.len())
     }
+
+    #[inline]
+    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        let mut nwritten = 0;
+        for buf in bufs {
+            nwritten += self.read(buf)?;
+        }
+        Ok(nwritten)
+    }
+
+    #[inline]
+    unsafe fn initializer(&self) -> Initializer {
+        Initializer::nop()
+    }
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Repeat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Repeat { .. }")
     }
 }
@@ -155,7 +199,9 @@ impl fmt::Debug for Repeat {
 ///
 /// [sink]: fn.sink.html
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct Sink { _priv: () }
+pub struct Sink {
+    _priv: (),
+}
 
 /// Creates an instance of a writer which will successfully consume all data.
 ///
@@ -172,25 +218,40 @@ pub struct Sink { _priv: () }
 /// assert_eq!(num_bytes, 5);
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-pub fn sink() -> Sink { Sink { _priv: () } }
+pub fn sink() -> Sink {
+    Sink { _priv: () }
+}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Write for Sink {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> { Ok(buf.len()) }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        let total_len = bufs.iter().map(|b| b.len()).sum();
+        Ok(total_len)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Sink {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Sink { .. }")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use io::prelude::*;
-    use io::{copy, sink, empty, repeat};
+    use crate::io::prelude::*;
+    use crate::io::{copy, empty, repeat, sink};
 
     #[test]
     fn copy_copies() {
@@ -199,7 +260,7 @@ mod tests {
         assert_eq!(copy(&mut r, &mut w).unwrap(), 4);
 
         let mut r = repeat(0).take(1 << 17);
-        assert_eq!(copy(&mut r as &mut Read, &mut w as &mut Write).unwrap(), 1 << 17);
+        assert_eq!(copy(&mut r as &mut dyn Read, &mut w as &mut dyn Write).unwrap(), 1 << 17);
     }
 
     #[test]

@@ -1,11 +1,12 @@
-error[E0596]: cannot borrow immutable local variable `x` as mutable
-  --> $DIR/issue-37139.rs:22:23
+error[E0596]: cannot borrow `x` as mutable, as it is not declared as mutable
+  --> $DIR/issue-37139.rs:12:18
    |
-22 |             test(&mut x);
-   |                       ^
-   |                       |
-   |                       try removing `&mut` here
-   |                       cannot reborrow mutably
+LL |             test(&mut x);
+   |                  ^^^^^^
+   |                  |
+   |                  cannot borrow as mutable
+   |                  try removing `&mut` here
 
-error: aborting due to previous error(s)
+error: aborting due to previous error
 
+For more information about this error, try `rustc --explain E0596`.

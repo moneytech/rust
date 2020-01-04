@@ -15,15 +15,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   libssl-dev \
   pkg-config
 
-RUN curl -o /usr/local/bin/sccache \
-      https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/2017-05-12-sccache-x86_64-unknown-linux-musl && \
-      chmod +x /usr/local/bin/sccache
+COPY scripts/sccache.sh /scripts/
+RUN sh /scripts/sccache.sh
 
-RUN curl -OL https://github.com/Yelp/dumb-init/releases/download/v1.2.0/dumb-init_1.2.0_amd64.deb && \
-    dpkg -i dumb-init_*.deb && \
-    rm dumb-init_*.deb
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
-
-ENV RUST_CONFIGURE_ARGS --build=x86_64-unknown-linux-gnu
+ENV RUST_CONFIGURE_ARGS --build=x86_64-unknown-linux-gnu --set rust.ignore-git=false
 ENV SCRIPT python2.7 ../x.py test distcheck
 ENV DIST_SRC 1
+
+# The purpose of this builder is to test that we can `./x.py test` successfully
+# from a tarball, not to test LLVM/rustc's own set of assertions. These cause a
+# significant hit to CI compile time (over a half hour as observed in #61185),
+# so disable assertions for this builder.
+ENV NO_LLVM_ASSERTIONS=1
+ENV NO_DEBUG_ASSERTIONS=1

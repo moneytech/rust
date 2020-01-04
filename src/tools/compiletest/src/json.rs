@@ -1,23 +1,14 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+//! These structs are a subset of the ones found in `rustc_errors::json`.
+//! They are only used for deserialization of JSON output provided by libtest.
 
-use errors::{Error, ErrorKind};
-use rustc_serialize::json;
+use crate::errors::{Error, ErrorKind};
+use crate::runtest::ProcRes;
+use serde::Deserialize;
+use serde_json;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::path::Path;
-use runtest::ProcRes;
 
-// These structs are a subset of the ones found in
-// `syntax::json`.
-
-#[derive(RustcEncodable, RustcDecodable)]
+#[derive(Deserialize)]
 struct Diagnostic {
     message: String,
     code: Option<DiagnosticCode>,
@@ -27,7 +18,13 @@ struct Diagnostic {
     rendered: Option<String>,
 }
 
-#[derive(RustcEncodable, RustcDecodable, Clone)]
+#[derive(Deserialize)]
+struct ArtifactNotification {
+    #[allow(dead_code)]
+    artifact: PathBuf,
+}
+
+#[derive(Deserialize, Clone)]
 struct DiagnosticSpan {
     file_name: String,
     line_start: usize,
@@ -36,10 +33,26 @@ struct DiagnosticSpan {
     column_end: usize,
     is_primary: bool,
     label: Option<String>,
+    suggested_replacement: Option<String>,
     expansion: Option<Box<DiagnosticSpanMacroExpansion>>,
 }
 
-#[derive(RustcEncodable, RustcDecodable, Clone)]
+impl DiagnosticSpan {
+    /// Returns the deepest source span in the macro call stack with a given file name.
+    /// This is either the supplied span, or the span for some macro callsite that expanded to it.
+    fn first_callsite_in_file(&self, file_name: &str) -> &DiagnosticSpan {
+        if self.file_name == file_name {
+            self
+        } else {
+            self.expansion
+                .as_ref()
+                .map(|origin| origin.span.first_callsite_in_file(file_name))
+                .unwrap_or(self)
+        }
+    }
+}
+
+#[derive(Deserialize, Clone)]
 struct DiagnosticSpanMacroExpansion {
     /// span where macro was applied to generate this code
     span: DiagnosticSpan,
@@ -48,7 +61,7 @@ struct DiagnosticSpanMacroExpansion {
     macro_decl_name: String,
 }
 
-#[derive(RustcEncodable, RustcDecodable, Clone)]
+#[derive(Deserialize, Clone)]
 struct DiagnosticCode {
     /// The code itself.
     code: String,
@@ -56,28 +69,51 @@ struct DiagnosticCode {
     explanation: Option<String>,
 }
 
-pub fn parse_output(file_name: &str, output: &str, proc_res: &ProcRes) -> Vec<Error> {
-    output.lines()
-        .flat_map(|line| parse_line(file_name, line, output, proc_res))
+pub fn extract_rendered(output: &str) -> String {
+    output
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with('{') {
+                if let Ok(diagnostic) = serde_json::from_str::<Diagnostic>(line) {
+                    diagnostic.rendered
+                } else if let Ok(_) = serde_json::from_str::<ArtifactNotification>(line) {
+                    // Ignore the notification.
+                    None
+                } else {
+                    print!(
+                        "failed to decode compiler output as json: line: {}\noutput: {}",
+                        line, output
+                    );
+                    panic!()
+                }
+            } else {
+                // preserve non-JSON lines, such as ICEs
+                Some(format!("{}\n", line))
+            }
+        })
         .collect()
+}
+
+pub fn parse_output(file_name: &str, output: &str, proc_res: &ProcRes) -> Vec<Error> {
+    output.lines().flat_map(|line| parse_line(file_name, line, output, proc_res)).collect()
 }
 
 fn parse_line(file_name: &str, line: &str, output: &str, proc_res: &ProcRes) -> Vec<Error> {
     // The compiler sometimes intermingles non-JSON stuff into the
     // output.  This hack just skips over such lines. Yuck.
-    if line.chars().next() == Some('{') {
-        match json::decode::<Diagnostic>(line) {
+    if line.starts_with('{') {
+        match serde_json::from_str::<Diagnostic>(line) {
             Ok(diagnostic) => {
                 let mut expected_errors = vec![];
                 push_expected_errors(&mut expected_errors, &diagnostic, &[], file_name);
                 expected_errors
             }
             Err(error) => {
-                proc_res.fatal(Some(&format!("failed to decode compiler output as json: \
-                                              `{}`\noutput: {}\nline: {}",
-                                             error,
-                                             line,
-                                             output)));
+                proc_res.fatal(Some(&format!(
+                    "failed to decode compiler output as json: \
+                     `{}`\nline: {}\noutput: {}",
+                    error, line, output
+                )));
             }
         }
     } else {
@@ -85,19 +121,28 @@ fn parse_line(file_name: &str, line: &str, output: &str, proc_res: &ProcRes) -> 
     }
 }
 
-fn push_expected_errors(expected_errors: &mut Vec<Error>,
-                        diagnostic: &Diagnostic,
-                        default_spans: &[&DiagnosticSpan],
-                        file_name: &str) {
-    let spans_in_this_file: Vec<_> = diagnostic.spans
+fn push_expected_errors(
+    expected_errors: &mut Vec<Error>,
+    diagnostic: &Diagnostic,
+    default_spans: &[&DiagnosticSpan],
+    file_name: &str,
+) {
+    // In case of macro expansions, we need to get the span of the callsite
+    let spans_info_in_this_file: Vec<_> = diagnostic
+        .spans
         .iter()
-        .filter(|span| Path::new(&span.file_name) == Path::new(&file_name))
+        .map(|span| (span.is_primary, span.first_callsite_in_file(file_name)))
+        .filter(|(_, span)| Path::new(&span.file_name) == Path::new(&file_name))
         .collect();
 
-    let primary_spans: Vec<_> = spans_in_this_file.iter()
-        .cloned()
-        .filter(|span| span.is_primary)
+    let spans_in_this_file: Vec<_> = spans_info_in_this_file.iter().map(|(_, span)| span).collect();
+
+    let primary_spans: Vec<_> = spans_info_in_this_file
+        .iter()
+        .filter(|(is_primary, _)| *is_primary)
+        .map(|(_, span)| span)
         .take(1) // sometimes we have more than one showing up in the json; pick first
+        .cloned()
         .collect();
     let primary_spans = if primary_spans.is_empty() {
         // subdiagnostics often don't have a span of their own;
@@ -117,24 +162,33 @@ fn push_expected_errors(expected_errors: &mut Vec<Error>,
     let with_code = |span: &DiagnosticSpan, text: &str| {
         match diagnostic.code {
             Some(ref code) =>
-                // FIXME(#33000) -- it'd be better to use a dedicated
-                // UI harness than to include the line/col number like
-                // this, but some current tests rely on it.
-                //
-                // Note: Do NOT include the filename. These can easily
-                // cause false matches where the expected message
-                // appears in the filename, and hence the message
-                // changes but the test still passes.
-                format!("{}:{}: {}:{}: {} [{}]",
-                        span.line_start, span.column_start,
-                        span.line_end, span.column_end,
-                        text, code.code.clone()),
+            // FIXME(#33000) -- it'd be better to use a dedicated
+            // UI harness than to include the line/col number like
+            // this, but some current tests rely on it.
+            //
+            // Note: Do NOT include the filename. These can easily
+            // cause false matches where the expected message
+            // appears in the filename, and hence the message
+            // changes but the test still passes.
+            {
+                format!(
+                    "{}:{}: {}:{}: {} [{}]",
+                    span.line_start,
+                    span.column_start,
+                    span.line_end,
+                    span.column_end,
+                    text,
+                    code.code.clone()
+                )
+            }
             None =>
-                // FIXME(#33000) -- it'd be better to use a dedicated UI harness
-                format!("{}:{}: {}:{}: {}",
-                        span.line_start, span.column_start,
-                        span.line_end, span.column_end,
-                        text),
+            // FIXME(#33000) -- it'd be better to use a dedicated UI harness
+            {
+                format!(
+                    "{}:{}: {}:{}: {}",
+                    span.line_start, span.column_start, span.line_end, span.column_end, text
+                )
+            }
         }
     };
 
@@ -146,11 +200,7 @@ fn push_expected_errors(expected_errors: &mut Vec<Error>,
         for span in primary_spans {
             let msg = with_code(span, first_line);
             let kind = ErrorKind::from_str(&diagnostic.level).ok();
-            expected_errors.push(Error {
-                line_num: span.line_start,
-                kind: kind,
-                msg: msg,
-            });
+            expected_errors.push(Error { line_num: span.line_start, kind, msg });
         }
     }
     for next_line in message_lines {
@@ -164,15 +214,15 @@ fn push_expected_errors(expected_errors: &mut Vec<Error>,
     }
 
     // If the message has a suggestion, register that.
-    if let Some(ref rendered) = diagnostic.rendered {
-        let start_line = primary_spans.iter().map(|s| s.line_start).min().expect("\
-            every suggestion should have at least one span");
-        for (index, line) in rendered.lines().enumerate() {
-            expected_errors.push(Error {
-                line_num: start_line + index,
-                kind: Some(ErrorKind::Suggestion),
-                msg: line.to_string(),
-            });
+    for span in primary_spans {
+        if let Some(ref suggested_replacement) = span.suggested_replacement {
+            for (index, line) in suggested_replacement.lines().enumerate() {
+                expected_errors.push(Error {
+                    line_num: span.line_start + index,
+                    kind: Some(ErrorKind::Suggestion),
+                    msg: line.to_string(),
+                });
+            }
         }
     }
 
@@ -184,8 +234,7 @@ fn push_expected_errors(expected_errors: &mut Vec<Error>,
     }
 
     // Add notes for any labels that appear in the message.
-    for span in spans_in_this_file.iter()
-        .filter(|span| span.label.is_some()) {
+    for span in spans_in_this_file.iter().filter(|span| span.label.is_some()) {
         expected_errors.push(Error {
             line_num: span.line_start,
             kind: Some(ErrorKind::Note),
@@ -199,9 +248,11 @@ fn push_expected_errors(expected_errors: &mut Vec<Error>,
     }
 }
 
-fn push_backtrace(expected_errors: &mut Vec<Error>,
-                  expansion: &DiagnosticSpanMacroExpansion,
-                  file_name: &str) {
+fn push_backtrace(
+    expected_errors: &mut Vec<Error>,
+    expansion: &DiagnosticSpanMacroExpansion,
+    file_name: &str,
+) {
     if Path::new(&expansion.span.file_name) == Path::new(&file_name) {
         expected_errors.push(Error {
             line_num: expansion.span.line_start,

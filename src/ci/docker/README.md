@@ -16,11 +16,60 @@ for example:
 
 Images will output artifacts in an `obj` dir at the root of a repository.
 
+**NOTE**: Re-using the same `obj` dir with different docker images with
+the same target triple (e.g. `dist-x86_64-linux` and `dist-various-1`)
+may result in strange linker errors, due shared library versions differing between platforms.
+
+If you encounter any issues when using multiple Docker images, try deleting your `obj` directory
+before running your command.
+
 ## Filesystem layout
 
 - Each directory, excluding `scripts` and `disabled`, corresponds to a docker image
 - `scripts` contains files shared by docker images
-- `disabled` contains images that are not build travis
+- `disabled` contains images that are not built on CI
+
+## Docker Toolbox on Windows
+
+For Windows before Windows 10, the docker images can be run on Windows via
+[Docker Toolbox]. There are several preparation needs to be made before running
+a Docker image.
+
+1. Stop the virtual machine from the terminal with `docker-machine stop`
+
+2. If your Rust source is placed outside of `C:\Users\**`, e.g. if you place the
+    repository in the `E:\rust` folder, please add a shared folder from
+    VirtualBox by:
+
+    1. Select the "default" virtual machine inside VirtualBox, then click
+        "Settings"
+    2. Go to "Shared Folders", click "Add shared folder" (the folder icon with
+        a plus sign), fill in the following information, then click "OK":
+
+        * Folder path: `E:\rust`
+        * Folder name: `e/rust`
+        * Read-only: ☐ *unchecked*
+        * Auto-mount: ☑ *checked*
+        * Make Permanent: ☑ *checked*
+
+3. VirtualBox might not support creating symbolic links inside a shared folder
+    by default. You can enable it manually by running these from `cmd.exe`:
+
+    ```bat
+    cd "C:\Program Files\Oracle\VirtualBox"
+    VBoxManage setextradata default VBoxInternal2/SharedFoldersEnableSymlinksCreate/e/rust 1
+    ::                                                                              ^~~~~~
+    ::                                                                              folder name
+    ```
+
+4. Restart the virtual machine from terminal with `docker-machine start`.
+
+To run the image,
+
+1. Launch the "Docker Quickstart Terminal".
+2. Execute `./src/ci/docker/run.sh $image_name` as explained at the beginning.
+
+[Docker Toolbox]: https://www.docker.com/products/docker-toolbox
 
 ## Cross toolchains
 
@@ -89,13 +138,15 @@ $category > $option = $value -- $comment
 For targets: `arm-unknown-linux-gnueabi`
 
 - Path and misc options > Prefix directory = /x-tools/${CT\_TARGET}
+- Path and misc options > Patches origin = Bundled, then local
+- Path and misc options > Local patch directory = /tmp/patches
 - Target options > Target Architecture = arm
 - Target options > Architecture level = armv6 -- (+)
 - Target options > Floating point = software (no FPU) -- (\*)
 - Operating System > Target OS = linux
 - Operating System > Linux kernel version = 3.2.72 -- Precise kernel
-- C-library > glibc version = 2.14.1
-- C compiler > gcc version = 4.9.3
+- C-library > glibc version = 2.16.0
+- C compiler > gcc version = 5.2.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
 ### `arm-linux-gnueabihf.config`
@@ -103,6 +154,8 @@ For targets: `arm-unknown-linux-gnueabi`
 For targets: `arm-unknown-linux-gnueabihf`
 
 - Path and misc options > Prefix directory = /x-tools/${CT\_TARGET}
+- Path and misc options > Patches origin = Bundled, then local
+- Path and misc options > Local patch directory = /tmp/patches
 - Target options > Target Architecture = arm
 - Target options > Architecture level = armv6 -- (+)
 - Target options > Use specific FPU = vfp -- (+)
@@ -110,8 +163,8 @@ For targets: `arm-unknown-linux-gnueabihf`
 - Target options > Default instruction set mode = arm -- (+)
 - Operating System > Target OS = linux
 - Operating System > Linux kernel version = 3.2.72 -- Precise kernel
-- C-library > glibc version = 2.14.1
-- C compiler > gcc version = 4.9.3
+- C-library > glibc version = 2.16.0
+- C compiler > gcc version = 5.2.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
 ### `armv7-linux-gnueabihf.config`
@@ -119,6 +172,7 @@ For targets: `arm-unknown-linux-gnueabihf`
 For targets: `armv7-unknown-linux-gnueabihf`
 
 - Path and misc options > Prefix directory = /x-tools/${CT\_TARGET}
+- Path and misc options > Patches origin = Bundled only
 - Target options > Target Architecture = arm
 - Target options > Suffix to the arch-part = v7
 - Target options > Architecture level = armv7-a -- (+)
@@ -126,9 +180,9 @@ For targets: `armv7-unknown-linux-gnueabihf`
 - Target options > Floating point = hardware (FPU) -- (\*)
 - Target options > Default instruction set mode = thumb -- (\*)
 - Operating System > Target OS = linux
-- Operating System > Linux kernel version = 3.2.72 -- Precise kernel
-- C-library > glibc version = 2.14.1
-- C compiler > gcc version = 4.9.3
+- Operating System > Linux kernel version = 3.2.101
+- C-library > glibc version = 2.17.0
+- C compiler > gcc version = 8.3.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
 (\*) These options have been selected to match the configuration of the arm
@@ -137,7 +191,7 @@ For targets: `armv7-unknown-linux-gnueabihf`
     libraries like jemalloc. See the mk/cfg/arm(v7)-uknown-linux-gnueabi{,hf}.mk
     file in Rust's source code.
 
-## `aarch64-linux-gnu.config`
+### `aarch64-linux-gnu.config`
 
 For targets: `aarch64-unknown-linux-gnu`
 
@@ -150,7 +204,7 @@ For targets: `aarch64-unknown-linux-gnu`
 - C compiler > gcc version = 5.2.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
-## `powerpc-linux-gnu.config`
+### `powerpc-linux-gnu.config`
 
 For targets: `powerpc-unknown-linux-gnu`
 
@@ -162,10 +216,10 @@ For targets: `powerpc-unknown-linux-gnu`
 - Operating System > Target OS = linux
 - Operating System > Linux kernel version = 2.6.32.68 -- ~RHEL6 kernel
 - C-library > glibc version = 2.12.2 -- ~RHEL6 glibc
-- C compiler > gcc version = 4.9.3
+- C compiler > gcc version = 5.2.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
-## `powerpc64-linux-gnu.config`
+### `powerpc64-linux-gnu.config`
 
 For targets: `powerpc64-unknown-linux-gnu`
 
@@ -179,23 +233,23 @@ For targets: `powerpc64-unknown-linux-gnu`
 - Operating System > Target OS = linux
 - Operating System > Linux kernel version = 2.6.32.68 -- ~RHEL6 kernel
 - C-library > glibc version = 2.12.2 -- ~RHEL6 glibc
-- C compiler > gcc version = 4.9.3
+- C compiler > gcc version = 5.2.0
 - C compiler > C++ = ENABLE -- to cross compile LLVM
 
 (+) These CPU options match the configuration of the toolchains in RHEL6.
 
-## `s390x-linux-gnu.config`
+### `s390x-linux-gnu.config`
 
 For targets: `s390x-unknown-linux-gnu`
 
 - Path and misc options > Prefix directory = /x-tools/${CT\_TARGET}
 - Path and misc options > Patches origin = Bundled, then local
-- Path and misc options > Local patch directory = /build/patches
+- Path and misc options > Local patch directory = /tmp/patches
 - Target options > Target Architecture = s390
 - Target options > Bitness = 64-bit
 - Operating System > Target OS = linux
 - Operating System > Linux kernel version = 2.6.32.68 -- ~RHEL6 kernel
 - C-library > glibc version = 2.12.2 -- ~RHEL6 glibc
-- C compiler > gcc version = 4.9.3
+- C compiler > gcc version = 5.2.0
 - C compiler > gcc extra config = --with-arch=z10 -- LLVM's minimum support
 - C compiler > C++ = ENABLE -- to cross compile LLVM

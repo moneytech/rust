@@ -1,16 +1,5 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use std::iter;
-use core::num::dec2flt::parse::{Decimal, parse_decimal};
-use core::num::dec2flt::parse::ParseResult::{Valid, Invalid};
+use core::num::dec2flt::parse::ParseResult::{Invalid, Valid};
+use core::num::dec2flt::parse::{parse_decimal, Decimal};
 
 #[test]
 fn missing_pieces() {
@@ -46,7 +35,7 @@ fn valid() {
     assert_eq!(parse_decimal("1.e300"), Valid(Decimal::new(b"1", b"", 300)));
     assert_eq!(parse_decimal(".1e300"), Valid(Decimal::new(b"", b"1", 300)));
     assert_eq!(parse_decimal("101e-33"), Valid(Decimal::new(b"101", b"", -33)));
-    let zeros: String = iter::repeat('0').take(25).collect();
+    let zeros = "0".repeat(25);
     let s = format!("1.5e{}", zeros);
     assert_eq!(parse_decimal(&s), Valid(Decimal::new(b"1", b"5", 0)));
 }

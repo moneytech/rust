@@ -1,25 +1,17 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-//
-extern crate mdbook;
-#[macro_use]
-extern crate clap;
+use clap::crate_version;
 
 use std::env;
-use std::error::Error;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use clap::{App, ArgMatches, SubCommand, AppSettings};
+use clap::{App, AppSettings, ArgMatches, SubCommand};
 
+use mdbook::errors::Result as Result3;
 use mdbook::MDBook;
+
+#[cfg(feature = "linkcheck")]
+use failure::Error;
+#[cfg(feature = "linkcheck")]
+use mdbook::renderer::RenderContext;
 
 fn main() {
     let d_message = "-d, --dest-dir=[dest-dir]
@@ -28,73 +20,91 @@ fn main() {
 'A directory for your book{n}(Defaults to Current Directory when omitted)'";
 
     let matches = App::new("rustbook")
-                    .about("Build a book with mdBook")
-                    .author("Steve Klabnik <steve@steveklabnik.com>")
-                    .version(&*format!("v{}", crate_version!()))
-                    .setting(AppSettings::SubcommandRequired)
-                    .subcommand(SubCommand::with_name("build")
-                        .about("Build the book from the markdown files")
-                        .arg_from_usage(d_message)
-                        .arg_from_usage(dir_message))
-                    .get_matches();
+        .about("Build a book with mdBook")
+        .author("Steve Klabnik <steve@steveklabnik.com>")
+        .version(&*format!("v{}", crate_version!()))
+        .setting(AppSettings::SubcommandRequired)
+        .subcommand(
+            SubCommand::with_name("build")
+                .about("Build the book from the markdown files")
+                .arg_from_usage(d_message)
+                .arg_from_usage(dir_message),
+        )
+        .subcommand(
+            SubCommand::with_name("linkcheck")
+                .about("Run linkcheck with mdBook 3")
+                .arg_from_usage(dir_message),
+        )
+        .get_matches();
 
     // Check which subcomamnd the user ran...
-    let res = match matches.subcommand() {
-        ("build", Some(sub_matches)) => build(sub_matches),
-        ("test", Some(sub_matches)) => test(sub_matches),
+    match matches.subcommand() {
+        ("build", Some(sub_matches)) => {
+            if let Err(e) = build(sub_matches) {
+                eprintln!("Error: {}", e);
+
+                for cause in e.iter().skip(1) {
+                    eprintln!("\tCaused By: {}", cause);
+                }
+
+                ::std::process::exit(101);
+            }
+        }
+        ("linkcheck", Some(sub_matches)) => {
+            #[cfg(feature = "linkcheck")]
+            {
+                if let Err(err) = linkcheck(sub_matches) {
+                    eprintln!("Error: {}", err);
+                    std::process::exit(101);
+                }
+            }
+
+            #[cfg(not(feature = "linkcheck"))]
+            {
+                // This avoids the `unused_binding` lint.
+                println!(
+                    "mdbook-linkcheck is disabled, but arguments were passed: {:?}",
+                    sub_matches
+                );
+            }
+        }
         (_, _) => unreachable!(),
     };
+}
 
-    if let Err(e) = res {
-        writeln!(&mut io::stderr(), "An error occured:\n{}", e).ok();
-        ::std::process::exit(101);
-    }
+#[cfg(feature = "linkcheck")]
+pub fn linkcheck(args: &ArgMatches<'_>) -> Result<(), Error> {
+    let book_dir = get_book_dir(args);
+    let book = MDBook::load(&book_dir).unwrap();
+    let cfg = book.config;
+    let render_ctx = RenderContext::new(&book_dir, book.book, cfg, &book_dir);
+    let cache_file = render_ctx.destination.join("cache.json");
+    let color = codespan_reporting::term::termcolor::ColorChoice::Auto;
+    mdbook_linkcheck::run(&cache_file, color, &render_ctx)
 }
 
 // Build command implementation
-fn build(args: &ArgMatches) -> Result<(), Box<Error>> {
-    let book = build_mdbook_struct(args);
-
-    let mut book = match args.value_of("dest-dir") {
-        Some(dest_dir) => book.set_dest(Path::new(dest_dir)),
-        None => book
-    };
-
-    try!(book.build());
-
-    Ok(())
-}
-
-fn test(args: &ArgMatches) -> Result<(), Box<Error>> {
-    let mut book = build_mdbook_struct(args);
-
-    try!(book.test());
-
-    Ok(())
-}
-
-fn build_mdbook_struct(args: &ArgMatches) -> mdbook::MDBook {
+pub fn build(args: &ArgMatches<'_>) -> Result3<()> {
     let book_dir = get_book_dir(args);
-    let mut book = MDBook::new(&book_dir).read_config();
+    let mut book = MDBook::load(&book_dir)?;
 
-    // By default mdbook will attempt to create non-existent files referenced
-    // from SUMMARY.md files. This is problematic on CI where we mount the
-    // source directory as readonly. To avoid any issues, we'll disabled
-    // mdbook's implicit file creation feature.
-    book.create_missing = false;
+    // Set this to allow us to catch bugs in advance.
+    book.config.build.create_missing = false;
 
-    book
+    if let Some(dest_dir) = args.value_of("dest-dir") {
+        book.config.build.build_dir = PathBuf::from(dest_dir);
+    }
+
+    book.build()?;
+
+    Ok(())
 }
 
-fn get_book_dir(args: &ArgMatches) -> PathBuf {
+fn get_book_dir(args: &ArgMatches<'_>) -> PathBuf {
     if let Some(dir) = args.value_of("dir") {
         // Check if path is relative from current dir, or absolute...
         let p = Path::new(dir);
-        if p.is_relative() {
-            env::current_dir().unwrap().join(dir)
-        } else {
-            p.to_path_buf()
-        }
+        if p.is_relative() { env::current_dir().unwrap().join(dir) } else { p.to_path_buf() }
     } else {
         env::current_dir().unwrap()
     }

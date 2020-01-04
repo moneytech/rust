@@ -1,12 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+fn id<T>(x: T) -> T { x }
 
 fn f() {
     let old = ['o'];         // statement 0
@@ -14,48 +6,54 @@ fn f() {
 
     let mut v2 = Vec::new(); // statement 2
 
-    let young = ['y'];       // statement 3
+    {
+        let young = ['y'];       // statement 3
 
-    v2.push(&young[0]);      // statement 4
-    //~^ NOTE borrow occurs here
+        v2.push(&young[0]);      // statement 4
+        //~^ ERROR `young[_]` does not live long enough
+        //~| NOTE borrowed value does not live long enough
+    } //~ NOTE `young[_]` dropped here while still borrowed
 
     let mut v3 = Vec::new(); // statement 5
 
-    v3.push(&'x');           // statement 6
-    //~^ ERROR borrowed value does not live long enough
-    //~| NOTE temporary value created here
-    //~| NOTE temporary value only lives until here
-    //~| NOTE consider using a `let` binding to increase its lifetime
+    v3.push(&id('x'));           // statement 6
+    //~^ ERROR temporary value dropped while borrowed
+    //~| NOTE creates a temporary which is freed while still in use
+    //~| NOTE temporary value is freed at the end of this statement
+    //~| NOTE consider using a `let` binding to create a longer lived value
 
     {
 
         let mut v4 = Vec::new(); // (sub) statement 0
 
-        v4.push(&'y');
-        //~^ ERROR borrowed value does not live long enough
-        //~| NOTE temporary value created here
-        //~| NOTE temporary value only lives until here
-        //~| NOTE consider using a `let` binding to increase its lifetime
-
+        v4.push(&id('y'));
+        //~^ ERROR temporary value dropped while borrowed
+        //~| NOTE creates a temporary which is freed while still in use
+        //~| NOTE temporary value is freed at the end of this statement
+        //~| NOTE consider using a `let` binding to create a longer lived value
+        v4.use_ref();
+        //~^ NOTE borrow later used here
     }                       // (statement 7)
-    //~^ NOTE temporary value needs to live until here
 
     let mut v5 = Vec::new(); // statement 8
 
-    v5.push(&'z');
-    //~^ ERROR borrowed value does not live long enough
-    //~| NOTE temporary value created here
-    //~| NOTE temporary value only lives until here
-    //~| NOTE consider using a `let` binding to increase its lifetime
+    v5.push(&id('z'));
+    //~^ ERROR temporary value dropped while borrowed
+    //~| NOTE creates a temporary which is freed while still in use
+    //~| NOTE temporary value is freed at the end of this statement
+    //~| NOTE consider using a `let` binding to create a longer lived value
 
     v1.push(&old[0]);
+
+    (v1, v2, v3, /* v4 is above. */ v5).use_ref();
+    //~^ NOTE borrow later used here
+    //~| NOTE borrow later used here
+    //~| NOTE borrow later used here
 }
-//~^ ERROR `young[..]` does not live long enough
-//~| NOTE `young[..]` dropped here while still borrowed
-//~| NOTE values in a scope are dropped in the opposite order they are created
-//~| NOTE temporary value needs to live until here
-//~| NOTE temporary value needs to live until here
 
 fn main() {
     f();
 }
+
+trait Fake { fn use_mut(&mut self) { } fn use_ref(&self) { }  }
+impl<T> Fake for T { }

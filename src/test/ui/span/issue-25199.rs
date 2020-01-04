@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Regression test for Issue 25199: Check that one cannot hide a
 // destructor's access to borrowed data behind a boxed trait object.
 //
@@ -44,7 +34,7 @@ impl Drop for VecHolder {
 
 struct Container<'a> {
     v: VecHolder,
-    d: RefCell<Vec<Box<Obj+'a>>>,
+    d: RefCell<Vec<Box<dyn Obj+'a>>>,
 }
 
 impl<'a> Container<'a> {
@@ -78,8 +68,7 @@ impl<'a> Drop for Test<'a> {
 fn main() {
     let container = Container::new();
     let test = Test{test: &container};
+    //~^ ERROR `container` does not live long enough
     println!("container.v[30]: {:?}", container.v.v[30]);
     container.store(test);
 }
-//~^ ERROR `container` does not live long enough
-//~| ERROR `container` does not live long enough

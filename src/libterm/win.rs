@@ -1,27 +1,15 @@
-// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Windows console handling
 
 // FIXME (#13400): this is only a tiny fraction of the Windows console api
 
-extern crate libc;
-
 use std::io;
 use std::io::prelude::*;
 
-use Attr;
-use color;
-use Terminal;
+use crate::color;
+use crate::Attr;
+use crate::Terminal;
 
-/// A Terminal implementation which uses the Win32 Console API.
+/// A Terminal implementation that uses the Win32 Console API.
 pub struct WinConsole<T> {
     buf: T,
     def_foreground: color::Color,
@@ -30,6 +18,7 @@ pub struct WinConsole<T> {
     background: color::Color,
 }
 
+type SHORT = i16;
 type WORD = u16;
 type DWORD = u32;
 type BOOL = i32;
@@ -37,12 +26,28 @@ type HANDLE = *mut u8;
 
 #[allow(non_snake_case)]
 #[repr(C)]
+struct SMALL_RECT {
+    Left: SHORT,
+    Top: SHORT,
+    Right: SHORT,
+    Bottom: SHORT,
+}
+
+#[allow(non_snake_case)]
+#[repr(C)]
+struct COORD {
+    X: SHORT,
+    Y: SHORT,
+}
+
+#[allow(non_snake_case)]
+#[repr(C)]
 struct CONSOLE_SCREEN_BUFFER_INFO {
-    dwSize: [libc::c_short; 2],
-    dwCursorPosition: [libc::c_short; 2],
+    dwSize: COORD,
+    dwCursorPosition: COORD,
     wAttributes: WORD,
-    srWindow: [libc::c_short; 4],
-    dwMaximumWindowSize: [libc::c_short; 2],
+    srWindow: SMALL_RECT,
+    dwMaximumWindowSize: COORD,
 }
 
 #[allow(non_snake_case)]
@@ -68,11 +73,7 @@ fn color_to_bits(color: color::Color) -> u16 {
         _ => unreachable!(),
     };
 
-    if color >= 8 {
-        bits | 0x8
-    } else {
-        bits
-    }
+    if color >= 8 { bits | 0x8 } else { bits }
 }
 
 fn bits_to_color(bits: u16) -> color::Color {
@@ -100,7 +101,7 @@ impl<T: Write + Send + 'static> WinConsole<T> {
 
         unsafe {
             // Magic -11 means stdout, from
-            // http://msdn.microsoft.com/en-us/library/windows/desktop/ms683231%28v=vs.85%29.aspx
+            // https://docs.microsoft.com/en-us/windows/console/getstdhandle
             //
             // You may be wondering, "but what about stderr?", and the answer
             // to that is that setting terminal attributes on the stdout
@@ -113,14 +114,18 @@ impl<T: Write + Send + 'static> WinConsole<T> {
         }
     }
 
-    /// Returns `None` whenever the terminal cannot be created for some
-    /// reason.
+    /// Returns `None` whenever the terminal cannot be created for some reason.
     pub fn new(out: T) -> io::Result<WinConsole<T>> {
+        use std::mem::MaybeUninit;
+
         let fg;
         let bg;
         unsafe {
-            let mut buffer_info = ::std::mem::uninitialized();
-            if GetConsoleScreenBufferInfo(GetStdHandle(-11i32 as DWORD), &mut buffer_info) != 0 {
+            let mut buffer_info = MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
+            if GetConsoleScreenBufferInfo(GetStdHandle(-11i32 as DWORD), buffer_info.as_mut_ptr())
+                != 0
+            {
+                let buffer_info = buffer_info.assume_init();
                 fg = bits_to_color(buffer_info.wAttributes);
                 bg = bits_to_color(buffer_info.wAttributes >> 4);
             } else {
@@ -198,16 +203,17 @@ impl<T: Write + Send + 'static> Terminal for WinConsole<T> {
         Ok(true)
     }
 
-    fn get_ref<'a>(&'a self) -> &'a T {
+    fn get_ref(&self) -> &T {
         &self.buf
     }
 
-    fn get_mut<'a>(&'a mut self) -> &'a mut T {
+    fn get_mut(&mut self) -> &mut T {
         &mut self.buf
     }
 
     fn into_inner(self) -> T
-        where Self: Sized
+    where
+        Self: Sized,
     {
         self.buf
     }

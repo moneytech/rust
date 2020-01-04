@@ -1,13 +1,3 @@
-// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Terminal formatting library.
 //!
 //! This crate provides the `Terminal` trait, which abstracts over an [ANSI
@@ -37,36 +27,23 @@
 //! ```
 //!
 //! [ansi]: https://en.wikipedia.org/wiki/ANSI_escape_code
-//! [win]: http://msdn.microsoft.com/en-us/library/windows/desktop/ms682010%28v=vs.85%29.aspx
+//! [win]: https://docs.microsoft.com/en-us/windows/console/character-mode-applications
 //! [ti]: https://en.wikipedia.org/wiki/Terminfo
 
-#![crate_name = "term"]
-#![crate_type = "rlib"]
-#![crate_type = "dylib"]
-#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
-       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "https://doc.rust-lang.org/nightly/",
-       html_playground_url = "https://play.rust-lang.org/",
-       test(attr(deny(warnings))))]
+#![doc(
+    html_root_url = "https://doc.rust-lang.org/nightly/",
+    html_playground_url = "https://play.rust-lang.org/",
+    test(attr(deny(warnings)))
+)]
 #![deny(missing_docs)]
-#![deny(warnings)]
-
-#![feature(staged_api)]
 #![cfg_attr(windows, feature(libc))]
-// Handle rustfmt skips
-#![feature(custom_attribute)]
-#![allow(unused_attributes)]
-
-#![cfg_attr(stage0, unstable(feature = "rustc_private", issue = "27812"))]
-#![cfg_attr(stage0, feature(staged_api))]
 
 use std::io::prelude::*;
+use std::io::{self, Stderr, Stdout};
 
 pub use terminfo::TerminfoTerminal;
 #[cfg(windows)]
 pub use win::WinConsole;
-
-use std::io::{self, Stdout, Stderr};
 
 pub mod terminfo;
 
@@ -74,19 +51,19 @@ pub mod terminfo;
 mod win;
 
 /// Alias for stdout terminals.
-pub type StdoutTerminal = Terminal<Output = Stdout> + Send;
+pub type StdoutTerminal = dyn Terminal<Output = Stdout> + Send;
 /// Alias for stderr terminals.
-pub type StderrTerminal = Terminal<Output = Stderr> + Send;
+pub type StderrTerminal = dyn Terminal<Output = Stderr> + Send;
 
 #[cfg(not(windows))]
-/// Return a Terminal wrapping stdout, or None if a terminal couldn't be
+/// Returns a Terminal wrapping stdout, or None if a terminal couldn't be
 /// opened.
 pub fn stdout() -> Option<Box<StdoutTerminal>> {
     TerminfoTerminal::new(io::stdout()).map(|t| Box::new(t) as Box<StdoutTerminal>)
 }
 
 #[cfg(windows)]
-/// Return a Terminal wrapping stdout, or None if a terminal couldn't be
+/// Returns a Terminal wrapping stdout, or None if a terminal couldn't be
 /// opened.
 pub fn stdout() -> Option<Box<StdoutTerminal>> {
     TerminfoTerminal::new(io::stdout())
@@ -95,21 +72,20 @@ pub fn stdout() -> Option<Box<StdoutTerminal>> {
 }
 
 #[cfg(not(windows))]
-/// Return a Terminal wrapping stderr, or None if a terminal couldn't be
+/// Returns a Terminal wrapping stderr, or None if a terminal couldn't be
 /// opened.
 pub fn stderr() -> Option<Box<StderrTerminal>> {
     TerminfoTerminal::new(io::stderr()).map(|t| Box::new(t) as Box<StderrTerminal>)
 }
 
 #[cfg(windows)]
-/// Return a Terminal wrapping stderr, or None if a terminal couldn't be
+/// Returns a Terminal wrapping stderr, or None if a terminal couldn't be
 /// opened.
 pub fn stderr() -> Option<Box<StderrTerminal>> {
     TerminfoTerminal::new(io::stderr())
         .map(|t| Box::new(t) as Box<StderrTerminal>)
         .or_else(|| WinConsole::new(io::stderr()).ok().map(|t| Box::new(t) as Box<StderrTerminal>))
 }
-
 
 /// Terminal color definitions
 #[allow(missing_docs)]
@@ -189,12 +165,12 @@ pub trait Terminal: Write {
     /// if there was an I/O error.
     fn bg(&mut self, color: color::Color) -> io::Result<bool>;
 
-    /// Sets the given terminal attribute, if supported.  Returns `Ok(true)`
+    /// Sets the given terminal attribute, if supported. Returns `Ok(true)`
     /// if the attribute was supported, `Ok(false)` otherwise, and `Err(e)` if
     /// there was an I/O error.
     fn attr(&mut self, attr: Attr) -> io::Result<bool>;
 
-    /// Returns whether the given terminal attribute is supported.
+    /// Returns `true` if the given terminal attribute is supported.
     fn supports_attr(&self, attr: Attr) -> bool;
 
     /// Resets all terminal attributes and colors to their defaults.
@@ -205,7 +181,7 @@ pub trait Terminal: Write {
     /// *Note: This does not flush.*
     ///
     /// That means the reset command may get buffered so, if you aren't planning on doing anything
-    /// else that might flush stdout's buffer (e.g. writing a line of text), you should flush after
+    /// else that might flush stdout's buffer (e.g., writing a line of text), you should flush after
     /// calling reset.
     fn reset(&mut self) -> io::Result<bool>;
 
@@ -216,5 +192,7 @@ pub trait Terminal: Write {
     fn get_mut(&mut self) -> &mut Self::Output;
 
     /// Returns the contained stream, destroying the `Terminal`
-    fn into_inner(self) -> Self::Output where Self: Sized;
+    fn into_inner(self) -> Self::Output
+    where
+        Self: Sized;
 }

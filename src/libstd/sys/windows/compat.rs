@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! A "compatibility layer" for spanning XP and Windows 7
 //!
 //! The standard library currently binds many functions that are not available
@@ -21,9 +11,9 @@
 //! manner we pay a semi-large one-time cost up front for detecting whether a
 //! function is available but afterwards it's just a load and a jump.
 
-use ffi::CString;
-use sync::atomic::{AtomicUsize, Ordering};
-use sys::c;
+use crate::ffi::CString;
+use crate::sync::atomic::{AtomicUsize, Ordering};
+use crate::sys::c;
 
 pub fn lookup(module: &str, symbol: &str) -> Option<usize> {
     let mut module: Vec<u16> = module.encode_utf16().collect();
@@ -38,8 +28,7 @@ pub fn lookup(module: &str, symbol: &str) -> Option<usize> {
     }
 }
 
-pub fn store_func(ptr: &AtomicUsize, module: &str, symbol: &str,
-                  fallback: usize) -> usize {
+pub fn store_func(ptr: &AtomicUsize, module: &str, symbol: &str, fallback: usize) -> usize {
     let value = lookup(module, symbol).unwrap_or(fallback);
     ptr.store(value, Ordering::SeqCst);
     value
@@ -47,21 +36,23 @@ pub fn store_func(ptr: &AtomicUsize, module: &str, symbol: &str,
 
 macro_rules! compat_fn {
     ($module:ident: $(
+        $(#[$meta:meta])*
         pub fn $symbol:ident($($argname:ident: $argtype:ty),*)
                                   -> $rettype:ty {
             $($body:expr);*
         }
     )*) => ($(
         #[allow(unused_variables)]
+        $(#[$meta])*
         pub unsafe fn $symbol($($argname: $argtype),*) -> $rettype {
-            use sync::atomic::{AtomicUsize, Ordering};
-            use mem;
+            use crate::sync::atomic::{AtomicUsize, Ordering};
+            use crate::mem;
             type F = unsafe extern "system" fn($($argtype),*) -> $rettype;
 
             static PTR: AtomicUsize = AtomicUsize::new(0);
 
             fn load() -> usize {
-                ::sys::compat::store_func(&PTR,
+                crate::sys::compat::store_func(&PTR,
                                           stringify!($module),
                                           stringify!($symbol),
                                           fallback as usize)

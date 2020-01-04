@@ -1,26 +1,22 @@
 error: requires at least a format string argument
-  --> $DIR/bad-format-args.rs:12:5
+  --> $DIR/bad-format-args.rs:2:5
    |
-12 |     format!();
+LL |     format!();
    |     ^^^^^^^^^^
    |
-   = note: this error originates in a macro outside of the current crate
+   = note: this error originates in a macro outside of the current crate (in Nightly builds, run with -Z external-macro-backtrace for more info)
 
 error: expected token: `,`
-  --> $DIR/bad-format-args.rs:13:5
+  --> $DIR/bad-format-args.rs:3:16
    |
-13 |     format!("" 1);
-   |     ^^^^^^^^^^^^^^
-   |
-   = note: this error originates in a macro outside of the current crate
+LL |     format!("" 1);
+   |                ^ expected `,`
 
-error: expected token: `,`
-  --> $DIR/bad-format-args.rs:14:5
+error: expected one of `,`, `.`, `?`, or an operator, found `1`
+  --> $DIR/bad-format-args.rs:4:19
    |
-14 |     format!("", 1 1);
-   |     ^^^^^^^^^^^^^^^^^
-   |
-   = note: this error originates in a macro outside of the current crate
+LL |     format!("", 1 1);
+   |                   ^ expected one of `,`, `.`, `?`, or an operator
 
-error: aborting due to previous error(s)
+error: aborting due to 3 previous errors
 

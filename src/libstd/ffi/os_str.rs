@@ -1,22 +1,13 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+use crate::borrow::{Borrow, Cow};
+use crate::cmp;
+use crate::fmt;
+use crate::hash::{Hash, Hasher};
+use crate::ops;
+use crate::rc::Rc;
+use crate::sync::Arc;
 
-use borrow::{Borrow, Cow};
-use fmt::{self, Debug};
-use mem;
-use ops;
-use cmp;
-use hash::{Hash, Hasher};
-
-use sys::os_str::{Buf, Slice};
-use sys_common::{AsInner, IntoInner, FromInner};
+use crate::sys::os_str::{Buf, Slice};
+use crate::sys_common::{AsInner, FromInner, IntoInner};
 
 /// A type that can represent owned, mutable platform-native strings, but is
 /// cheaply inter-convertible with Rust strings.
@@ -29,25 +20,91 @@ use sys_common::{AsInner, IntoInner, FromInner};
 /// * On Windows, strings are often arbitrary sequences of non-zero 16-bit
 ///   values, interpreted as UTF-16 when it is valid to do so.
 ///
-/// * In Rust, strings are always valid UTF-8, but may contain zeros.
+/// * In Rust, strings are always valid UTF-8, which may contain zeros.
 ///
 /// `OsString` and [`OsStr`] bridge this gap by simultaneously representing Rust
 /// and platform-native string values, and in particular allowing a Rust string
-/// to be converted into an "OS" string with no cost.
+/// to be converted into an "OS" string with no cost if possible. A consequence
+/// of this is that `OsString` instances are *not* `NUL` terminated; in order
+/// to pass to e.g., Unix system call, you should create a [`CStr`].
+///
+/// `OsString` is to [`&OsStr`] as [`String`] is to [`&str`]: the former
+/// in each pair are owned strings; the latter are borrowed
+/// references.
+///
+/// Note, `OsString` and [`OsStr`] internally do not necessarily hold strings in
+/// the form native to the platform; While on Unix, strings are stored as a
+/// sequence of 8-bit values, on Windows, where strings are 16-bit value based
+/// as just discussed, strings are also actually stored as a sequence of 8-bit
+/// values, encoded in a less-strict variant of UTF-8. This is useful to
+/// understand when handling capacity and length values.
+///
+/// # Creating an `OsString`
+///
+/// **From a Rust string**: `OsString` implements
+/// [`From`]`<`[`String`]`>`, so you can use `my_string.from` to
+/// create an `OsString` from a normal Rust string.
+///
+/// **From slices:** Just like you can start with an empty Rust
+/// [`String`] and then [`push_str`][String.push_str] `&str`
+/// sub-string slices into it, you can create an empty `OsString` with
+/// the [`new`] method and then push string slices into it with the
+/// [`push`] method.
+///
+/// # Extracting a borrowed reference to the whole OS string
+///
+/// You can use the [`as_os_str`] method to get an `&`[`OsStr`] from
+/// an `OsString`; this is effectively a borrowed reference to the
+/// whole string.
+///
+/// # Conversions
+///
+/// See the [module's toplevel documentation about conversions][conversions] for a discussion on
+/// the traits which `OsString` implements for [conversions] from/to native representations.
 ///
 /// [`OsStr`]: struct.OsStr.html
+/// [`&OsStr`]: struct.OsStr.html
+/// [`CStr`]: struct.CStr.html
+/// [`From`]: ../convert/trait.From.html
+/// [`String`]: ../string/struct.String.html
+/// [`&str`]: ../primitive.str.html
+/// [`u8`]: ../primitive.u8.html
+/// [`u16`]: ../primitive.u16.html
+/// [String.push_str]: ../string/struct.String.html#method.push_str
+/// [`new`]: #method.new
+/// [`push`]: #method.push
+/// [`as_os_str`]: #method.as_os_str
+/// [conversions]: index.html#conversions
 #[derive(Clone)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct OsString {
-    inner: Buf
+    inner: Buf,
 }
 
-/// Slices into OS strings (see [`OsString`]).
+/// Borrowed reference to an OS string (see [`OsString`]).
+///
+/// This type represents a borrowed reference to a string in the operating system's preferred
+/// representation.
+///
+/// `&OsStr` is to [`OsString`] as [`&str`] is to [`String`]: the former in each pair are borrowed
+/// references; the latter are owned strings.
+///
+/// See the [module's toplevel documentation about conversions][conversions] for a discussion on
+/// the traits which `OsStr` implements for [conversions] from/to native representations.
 ///
 /// [`OsString`]: struct.OsString.html
+/// [`&str`]: ../primitive.str.html
+/// [`String`]: ../string/struct.String.html
+/// [conversions]: index.html#conversions
 #[stable(feature = "rust1", since = "1.0.0")]
+// FIXME:
+// `OsStr::from_inner` current implementation relies
+// on `OsStr` being layout-compatible with `Slice`.
+// When attribute privacy is implemented, `OsStr` should be annotated as `#[repr(transparent)]`.
+// Anyway, `OsStr` representation and layout are considered implementation detail, are
+// not documented and must not be relied upon.
 pub struct OsStr {
-    inner: Slice
+    inner: Slice,
 }
 
 impl OsString {
@@ -100,7 +157,7 @@ impl OsString {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn into_string(self) -> Result<String, OsString> {
-        self.inner.into_string().map_err(|buf| OsString { inner: buf} )
+        self.inner.into_string().map_err(|buf| OsString { inner: buf })
     }
 
     /// Extends the string with the given [`&OsStr`] slice.
@@ -123,7 +180,7 @@ impl OsString {
 
     /// Creates a new `OsString` with the given capacity.
     ///
-    /// The string will be able to hold exactly `capacity` lenth units of other
+    /// The string will be able to hold exactly `capacity` length units of other
     /// OS strings without reallocating. If `capacity` is 0, the string will not
     /// allocate.
     ///
@@ -144,9 +201,7 @@ impl OsString {
     /// ```
     #[stable(feature = "osstring_simple_functions", since = "1.9.0")]
     pub fn with_capacity(capacity: usize) -> OsString {
-        OsString {
-            inner: Buf::with_capacity(capacity)
-        }
+        OsString { inner: Buf::with_capacity(capacity) }
     }
 
     /// Truncates the `OsString` to zero length.
@@ -176,7 +231,7 @@ impl OsString {
     /// ```
     /// use std::ffi::OsString;
     ///
-    /// let mut os_string = OsString::with_capacity(10);
+    /// let os_string = OsString::with_capacity(10);
     /// assert!(os_string.capacity() >= 10);
     /// ```
     #[stable(feature = "osstring_simple_functions", since = "1.9.0")]
@@ -208,7 +263,7 @@ impl OsString {
     /// already sufficient.
     ///
     /// Note that the allocator may give the collection more space than it
-    /// requests. Therefore capacity can not be relied upon to be precisely
+    /// requests. Therefore, capacity can not be relied upon to be precisely
     /// minimal. Prefer reserve if future insertions are expected.
     ///
     /// # Examples
@@ -230,8 +285,6 @@ impl OsString {
     /// # Examples
     ///
     /// ```
-    /// #![feature(osstring_shrink_to_fit)]
-    ///
     /// use std::ffi::OsString;
     ///
     /// let mut s = OsString::from("foo");
@@ -242,9 +295,39 @@ impl OsString {
     /// s.shrink_to_fit();
     /// assert_eq!(3, s.capacity());
     /// ```
-    #[unstable(feature = "osstring_shrink_to_fit", issue = "40421")]
+    #[stable(feature = "osstring_shrink_to_fit", since = "1.19.0")]
     pub fn shrink_to_fit(&mut self) {
         self.inner.shrink_to_fit()
+    }
+
+    /// Shrinks the capacity of the `OsString` with a lower bound.
+    ///
+    /// The capacity will remain at least as large as both the length
+    /// and the supplied value.
+    ///
+    /// Panics if the current capacity is smaller than the supplied
+    /// minimum capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(shrink_to)]
+    /// use std::ffi::OsString;
+    ///
+    /// let mut s = OsString::from("foo");
+    ///
+    /// s.reserve(100);
+    /// assert!(s.capacity() >= 100);
+    ///
+    /// s.shrink_to(10);
+    /// assert!(s.capacity() >= 10);
+    /// s.shrink_to(0);
+    /// assert!(s.capacity() >= 3);
+    /// ```
+    #[inline]
+    #[unstable(feature = "shrink_to", reason = "new API", issue = "56431")]
+    pub fn shrink_to(&mut self, min_capacity: usize) {
+        self.inner.shrink_to(min_capacity)
     }
 
     /// Converts this `OsString` into a boxed [`OsStr`].
@@ -254,30 +337,34 @@ impl OsString {
     /// # Examples
     ///
     /// ```
-    /// #![feature(into_boxed_os_str)]
-    ///
     /// use std::ffi::{OsString, OsStr};
     ///
     /// let s = OsString::from("hello");
     ///
     /// let b: Box<OsStr> = s.into_boxed_os_str();
     /// ```
-    #[unstable(feature = "into_boxed_os_str", issue = "40380")]
+    #[stable(feature = "into_boxed_os_str", since = "1.20.0")]
     pub fn into_boxed_os_str(self) -> Box<OsStr> {
-        unsafe { mem::transmute(self.inner.into_box()) }
+        let rw = Box::into_raw(self.inner.into_box()) as *mut OsStr;
+        unsafe { Box::from_raw(rw) }
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl From<String> for OsString {
+    /// Converts a [`String`] into a [`OsString`].
+    ///
+    /// The conversion copies the data, and includes an allocation on the heap.
+    ///
+    /// [`OsString`]: ../../std/ffi/struct.OsString.html
     fn from(s: String) -> OsString {
         OsString { inner: Buf::from_string(s) }
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a, T: ?Sized + AsRef<OsStr>> From<&'a T> for OsString {
-    fn from(s: &'a T) -> OsString {
+impl<T: ?Sized + AsRef<OsStr>> From<&T> for OsString {
+    fn from(s: &T) -> OsString {
         s.as_ref().to_os_string()
     }
 }
@@ -312,8 +399,8 @@ impl Default for OsString {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl Debug for OsString {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+impl fmt::Debug for OsString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)
     }
 }
@@ -339,6 +426,20 @@ impl PartialEq<OsString> for str {
     }
 }
 
+#[stable(feature = "os_str_str_ref_eq", since = "1.29.0")]
+impl PartialEq<&str> for OsString {
+    fn eq(&self, other: &&str) -> bool {
+        **self == **other
+    }
+}
+
+#[stable(feature = "os_str_str_ref_eq", since = "1.29.0")]
+impl<'a> PartialEq<OsString> for &'a str {
+    fn eq(&self, other: &OsString) -> bool {
+        **other == **self
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Eq for OsString {}
 
@@ -349,13 +450,21 @@ impl PartialOrd for OsString {
         (&**self).partial_cmp(&**other)
     }
     #[inline]
-    fn lt(&self, other: &OsString) -> bool { &**self < &**other }
+    fn lt(&self, other: &OsString) -> bool {
+        &**self < &**other
+    }
     #[inline]
-    fn le(&self, other: &OsString) -> bool { &**self <= &**other }
+    fn le(&self, other: &OsString) -> bool {
+        &**self <= &**other
+    }
     #[inline]
-    fn gt(&self, other: &OsString) -> bool { &**self > &**other }
+    fn gt(&self, other: &OsString) -> bool {
+        &**self > &**other
+    }
     #[inline]
-    fn ge(&self, other: &OsString) -> bool { &**self >= &**other }
+    fn ge(&self, other: &OsString) -> bool {
+        &**self >= &**other
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -392,13 +501,15 @@ impl OsStr {
     ///
     /// let os_str = OsStr::new("foo");
     /// ```
+    #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn new<S: AsRef<OsStr> + ?Sized>(s: &S) -> &OsStr {
         s.as_ref()
     }
 
+    #[inline]
     fn from_inner(inner: &Slice) -> &OsStr {
-        unsafe { mem::transmute(inner) }
+        unsafe { &*(inner as *const Slice as *const OsStr) }
     }
 
     /// Yields a [`&str`] slice if the `OsStr` is valid Unicode.
@@ -422,26 +533,53 @@ impl OsStr {
 
     /// Converts an `OsStr` to a [`Cow`]`<`[`str`]`>`.
     ///
-    /// Any non-Unicode sequences are replaced with U+FFFD REPLACEMENT CHARACTER.
+    /// Any non-Unicode sequences are replaced with
+    /// [`U+FFFD REPLACEMENT CHARACTER`][U+FFFD].
     ///
     /// [`Cow`]: ../../std/borrow/enum.Cow.html
     /// [`str`]: ../../std/primitive.str.html
+    /// [U+FFFD]: ../../std/char/constant.REPLACEMENT_CHARACTER.html
     ///
     /// # Examples
     ///
-    /// Calling `to_string_lossy` on an `OsStr` with valid unicode:
+    /// Calling `to_string_lossy` on an `OsStr` with invalid unicode:
     ///
     /// ```
-    /// use std::ffi::OsStr;
+    /// // Note, due to differences in how Unix and Windows represent strings,
+    /// // we are forced to complicate this example, setting up example `OsStr`s
+    /// // with different source data and via different platform extensions.
+    /// // Understand that in reality you could end up with such example invalid
+    /// // sequences simply through collecting user command line arguments, for
+    /// // example.
     ///
-    /// let os_str = OsStr::new("foo");
-    /// assert_eq!(os_str.to_string_lossy(), "foo");
+    /// #[cfg(any(unix, target_os = "redox"))] {
+    ///     use std::ffi::OsStr;
+    ///     use std::os::unix::ffi::OsStrExt;
+    ///
+    ///     // Here, the values 0x66 and 0x6f correspond to 'f' and 'o'
+    ///     // respectively. The value 0x80 is a lone continuation byte, invalid
+    ///     // in a UTF-8 sequence.
+    ///     let source = [0x66, 0x6f, 0x80, 0x6f];
+    ///     let os_str = OsStr::from_bytes(&source[..]);
+    ///
+    ///     assert_eq!(os_str.to_string_lossy(), "fo�o");
+    /// }
+    /// #[cfg(windows)] {
+    ///     use std::ffi::OsString;
+    ///     use std::os::windows::prelude::*;
+    ///
+    ///     // Here the values 0x0066 and 0x006f correspond to 'f' and 'o'
+    ///     // respectively. The value 0xD800 is a lone surrogate half, invalid
+    ///     // in a UTF-16 sequence.
+    ///     let source = [0x0066, 0x006f, 0xD800, 0x006f];
+    ///     let os_string = OsString::from_wide(&source[..]);
+    ///     let os_str = os_string.as_os_str();
+    ///
+    ///     assert_eq!(os_str.to_string_lossy(), "fo�o");
+    /// }
     /// ```
-    ///
-    /// Had `os_str` contained invalid unicode, the `to_string_lossy` call might
-    /// have returned `"fo�"`.
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn to_string_lossy(&self) -> Cow<str> {
+    pub fn to_string_lossy(&self) -> Cow<'_, str> {
         self.inner.to_string_lossy()
     }
 
@@ -483,14 +621,19 @@ impl OsStr {
 
     /// Returns the length of this `OsStr`.
     ///
-    /// Note that this does **not** return the number of bytes in this string
-    /// as, for example, OS strings on Windows are encoded as a list of [`u16`]
-    /// rather than a list of bytes. This number is simply useful for passing to
-    /// other methods like [`OsString::with_capacity`] to avoid reallocations.
+    /// Note that this does **not** return the number of bytes in the string in
+    /// OS string form.
     ///
-    /// See `OsStr` introduction for more information about encoding.
+    /// The length returned is that of the underlying storage used by `OsStr`.
+    /// As discussed in the [`OsString`] introduction, [`OsString`] and `OsStr`
+    /// store strings in a form best suited for cheap inter-conversion between
+    /// native-platform and Rust string forms, which may differ significantly
+    /// from both of them, including in storage size and encoding.
     ///
-    /// [`u16`]: ../primitive.u16.html
+    /// This number is simply useful for passing to other methods, like
+    /// [`OsString::with_capacity`] to avoid reallocations.
+    ///
+    /// [`OsString`]: struct.OsString.html
     /// [`OsString::with_capacity`]: struct.OsString.html#method.with_capacity
     ///
     /// # Examples
@@ -513,60 +656,157 @@ impl OsStr {
     ///
     /// [`Box`]: ../boxed/struct.Box.html
     /// [`OsString`]: struct.OsString.html
-    #[unstable(feature = "into_boxed_os_str", issue = "40380")]
+    #[stable(feature = "into_boxed_os_str", since = "1.20.0")]
     pub fn into_os_string(self: Box<OsStr>) -> OsString {
-        let inner: Box<Slice> = unsafe { mem::transmute(self) };
-        OsString { inner: Buf::from_box(inner) }
+        let boxed = unsafe { Box::from_raw(Box::into_raw(self) as *mut Slice) };
+        OsString { inner: Buf::from_box(boxed) }
     }
 
     /// Gets the underlying byte representation.
     ///
     /// Note: it is *crucial* that this API is private, to avoid
     /// revealing the internal, platform-specific encodings.
+    #[inline]
     fn bytes(&self) -> &[u8] {
-        unsafe { mem::transmute(&self.inner) }
+        unsafe { &*(&self.inner as *const _ as *const [u8]) }
     }
 }
 
 #[stable(feature = "box_from_os_str", since = "1.17.0")]
-impl<'a> From<&'a OsStr> for Box<OsStr> {
-    fn from(s: &'a OsStr) -> Box<OsStr> {
-        unsafe { mem::transmute(s.inner.into_box()) }
+impl From<&OsStr> for Box<OsStr> {
+    fn from(s: &OsStr) -> Box<OsStr> {
+        let rw = Box::into_raw(s.inner.into_box()) as *mut OsStr;
+        unsafe { Box::from_raw(rw) }
     }
 }
 
 #[stable(feature = "os_string_from_box", since = "1.18.0")]
 impl From<Box<OsStr>> for OsString {
+    /// Converts a [`Box`]`<`[`OsStr`]`>` into a `OsString` without copying or
+    /// allocating.
+    ///
+    /// [`Box`]: ../boxed/struct.Box.html
+    /// [`OsStr`]: ../ffi/struct.OsStr.html
     fn from(boxed: Box<OsStr>) -> OsString {
         boxed.into_os_string()
     }
 }
 
-#[stable(feature = "box_from_os_string", since = "1.18.0")]
-impl Into<Box<OsStr>> for OsString {
-    fn into(self) -> Box<OsStr> {
-        self.into_boxed_os_str()
+#[stable(feature = "box_from_os_string", since = "1.20.0")]
+impl From<OsString> for Box<OsStr> {
+    /// Converts a [`OsString`] into a [`Box`]`<OsStr>` without copying or allocating.
+    ///
+    /// [`Box`]: ../boxed/struct.Box.html
+    /// [`OsString`]: ../ffi/struct.OsString.html
+    fn from(s: OsString) -> Box<OsStr> {
+        s.into_boxed_os_str()
+    }
+}
+
+#[stable(feature = "more_box_slice_clone", since = "1.29.0")]
+impl Clone for Box<OsStr> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.to_os_string().into_boxed_os_str()
+    }
+}
+
+#[stable(feature = "shared_from_slice2", since = "1.24.0")]
+impl From<OsString> for Arc<OsStr> {
+    /// Converts a [`OsString`] into a [`Arc`]`<OsStr>` without copying or allocating.
+    ///
+    /// [`Arc`]: ../sync/struct.Arc.html
+    /// [`OsString`]: ../ffi/struct.OsString.html
+    #[inline]
+    fn from(s: OsString) -> Arc<OsStr> {
+        let arc = s.inner.into_arc();
+        unsafe { Arc::from_raw(Arc::into_raw(arc) as *const OsStr) }
+    }
+}
+
+#[stable(feature = "shared_from_slice2", since = "1.24.0")]
+impl From<&OsStr> for Arc<OsStr> {
+    #[inline]
+    fn from(s: &OsStr) -> Arc<OsStr> {
+        let arc = s.inner.into_arc();
+        unsafe { Arc::from_raw(Arc::into_raw(arc) as *const OsStr) }
+    }
+}
+
+#[stable(feature = "shared_from_slice2", since = "1.24.0")]
+impl From<OsString> for Rc<OsStr> {
+    /// Converts a [`OsString`] into a [`Rc`]`<OsStr>` without copying or allocating.
+    ///
+    /// [`Rc`]: ../rc/struct.Rc.html
+    /// [`OsString`]: ../ffi/struct.OsString.html
+    #[inline]
+    fn from(s: OsString) -> Rc<OsStr> {
+        let rc = s.inner.into_rc();
+        unsafe { Rc::from_raw(Rc::into_raw(rc) as *const OsStr) }
+    }
+}
+
+#[stable(feature = "shared_from_slice2", since = "1.24.0")]
+impl From<&OsStr> for Rc<OsStr> {
+    #[inline]
+    fn from(s: &OsStr) -> Rc<OsStr> {
+        let rc = s.inner.into_rc();
+        unsafe { Rc::from_raw(Rc::into_raw(rc) as *const OsStr) }
+    }
+}
+
+#[stable(feature = "cow_from_osstr", since = "1.28.0")]
+impl<'a> From<OsString> for Cow<'a, OsStr> {
+    #[inline]
+    fn from(s: OsString) -> Cow<'a, OsStr> {
+        Cow::Owned(s)
+    }
+}
+
+#[stable(feature = "cow_from_osstr", since = "1.28.0")]
+impl<'a> From<&'a OsStr> for Cow<'a, OsStr> {
+    #[inline]
+    fn from(s: &'a OsStr) -> Cow<'a, OsStr> {
+        Cow::Borrowed(s)
+    }
+}
+
+#[stable(feature = "cow_from_osstr", since = "1.28.0")]
+impl<'a> From<&'a OsString> for Cow<'a, OsStr> {
+    #[inline]
+    fn from(s: &'a OsString) -> Cow<'a, OsStr> {
+        Cow::Borrowed(s.as_os_str())
+    }
+}
+
+#[stable(feature = "osstring_from_cow_osstr", since = "1.28.0")]
+impl<'a> From<Cow<'a, OsStr>> for OsString {
+    #[inline]
+    fn from(s: Cow<'a, OsStr>) -> Self {
+        s.into_owned()
     }
 }
 
 #[stable(feature = "box_default_extra", since = "1.17.0")]
 impl Default for Box<OsStr> {
     fn default() -> Box<OsStr> {
-        unsafe { mem::transmute(Slice::empty_box()) }
+        let rw = Box::into_raw(Slice::empty_box()) as *mut OsStr;
+        unsafe { Box::from_raw(rw) }
     }
 }
 
 #[stable(feature = "osstring_default", since = "1.9.0")]
-impl<'a> Default for &'a OsStr {
+impl Default for &OsStr {
     /// Creates an empty `OsStr`.
     #[inline]
-    fn default() -> &'a OsStr {
+    fn default() -> Self {
         OsStr::new("")
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl PartialEq for OsStr {
+    #[inline]
     fn eq(&self, other: &OsStr) -> bool {
         self.bytes().eq(other.bytes())
     }
@@ -574,6 +814,7 @@ impl PartialEq for OsStr {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl PartialEq<str> for OsStr {
+    #[inline]
     fn eq(&self, other: &str) -> bool {
         *self == *OsStr::new(other)
     }
@@ -581,6 +822,7 @@ impl PartialEq<str> for OsStr {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl PartialEq<OsStr> for str {
+    #[inline]
     fn eq(&self, other: &OsStr) -> bool {
         *other == *OsStr::new(self)
     }
@@ -596,13 +838,21 @@ impl PartialOrd for OsStr {
         self.bytes().partial_cmp(other.bytes())
     }
     #[inline]
-    fn lt(&self, other: &OsStr) -> bool { self.bytes().lt(other.bytes()) }
+    fn lt(&self, other: &OsStr) -> bool {
+        self.bytes().lt(other.bytes())
+    }
     #[inline]
-    fn le(&self, other: &OsStr) -> bool { self.bytes().le(other.bytes()) }
+    fn le(&self, other: &OsStr) -> bool {
+        self.bytes().le(other.bytes())
+    }
     #[inline]
-    fn gt(&self, other: &OsStr) -> bool { self.bytes().gt(other.bytes()) }
+    fn gt(&self, other: &OsStr) -> bool {
+        self.bytes().gt(other.bytes())
+    }
     #[inline]
-    fn ge(&self, other: &OsStr) -> bool { self.bytes().ge(other.bytes()) }
+    fn ge(&self, other: &OsStr) -> bool {
+        self.bytes().ge(other.bytes())
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -619,7 +869,9 @@ impl PartialOrd<str> for OsStr {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Ord for OsStr {
     #[inline]
-    fn cmp(&self, other: &OsStr) -> cmp::Ordering { self.bytes().cmp(other.bytes()) }
+    fn cmp(&self, other: &OsStr) -> cmp::Ordering {
+        self.bytes().cmp(other.bytes())
+    }
 }
 
 macro_rules! impl_cmp {
@@ -627,13 +879,17 @@ macro_rules! impl_cmp {
         #[stable(feature = "cmp_os_str", since = "1.8.0")]
         impl<'a, 'b> PartialEq<$rhs> for $lhs {
             #[inline]
-            fn eq(&self, other: &$rhs) -> bool { <OsStr as PartialEq>::eq(self, other) }
+            fn eq(&self, other: &$rhs) -> bool {
+                <OsStr as PartialEq>::eq(self, other)
+            }
         }
 
         #[stable(feature = "cmp_os_str", since = "1.8.0")]
         impl<'a, 'b> PartialEq<$lhs> for $rhs {
             #[inline]
-            fn eq(&self, other: &$lhs) -> bool { <OsStr as PartialEq>::eq(self, other) }
+            fn eq(&self, other: &$lhs) -> bool {
+                <OsStr as PartialEq>::eq(self, other)
+            }
         }
 
         #[stable(feature = "cmp_os_str", since = "1.8.0")]
@@ -651,7 +907,7 @@ macro_rules! impl_cmp {
                 <OsStr as PartialOrd>::partial_cmp(self, other)
             }
         }
-    }
+    };
 }
 
 impl_cmp!(OsString, OsStr);
@@ -669,15 +925,23 @@ impl Hash for OsStr {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl Debug for OsStr {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        self.inner.fmt(formatter)
+impl fmt::Debug for OsStr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, formatter)
+    }
+}
+
+impl OsStr {
+    pub(crate) fn display(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.inner, formatter)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Borrow<OsStr> for OsString {
-    fn borrow(&self) -> &OsStr { &self[..] }
+    fn borrow(&self) -> &OsStr {
+        &self[..]
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -708,6 +972,7 @@ impl AsRef<OsStr> for OsString {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl AsRef<OsStr> for str {
+    #[inline]
     fn as_ref(&self) -> &OsStr {
         OsStr::from_inner(Slice::from_str(self))
     }
@@ -715,6 +980,7 @@ impl AsRef<OsStr> for str {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl AsRef<OsStr> for String {
+    #[inline]
     fn as_ref(&self) -> &OsStr {
         (&**self).as_ref()
     }
@@ -733,6 +999,7 @@ impl IntoInner<Buf> for OsString {
 }
 
 impl AsInner<Slice> for OsStr {
+    #[inline]
     fn as_inner(&self) -> &Slice {
         &self.inner
     }
@@ -741,7 +1008,10 @@ impl AsInner<Slice> for OsStr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sys_common::{AsInner, IntoInner};
+    use crate::sys_common::{AsInner, IntoInner};
+
+    use crate::rc::Rc;
+    use crate::sync::Arc;
 
     #[test]
     fn test_os_string_with_capacity() {
@@ -884,5 +1154,22 @@ mod tests {
         os_str.clone_into(&mut os_string);
         assert_eq!(os_str, os_string);
         assert!(os_string.capacity() >= 123);
+    }
+
+    #[test]
+    fn into_rc() {
+        let orig = "Hello, world!";
+        let os_str = OsStr::new(orig);
+        let rc: Rc<OsStr> = Rc::from(os_str);
+        let arc: Arc<OsStr> = Arc::from(os_str);
+
+        assert_eq!(&*rc, os_str);
+        assert_eq!(&*arc, os_str);
+
+        let rc2: Rc<OsStr> = Rc::from(os_str.to_owned());
+        let arc2: Arc<OsStr> = Arc::from(os_str.to_owned());
+
+        assert_eq!(&*rc2, os_str);
+        assert_eq!(&*arc2, os_str);
     }
 }

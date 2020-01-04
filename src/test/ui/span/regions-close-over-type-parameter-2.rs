@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![feature(box_syntax)]
 
 // Test for what happens when a type parameter `A` is closed over into
@@ -20,8 +10,8 @@ impl<A> Foo for A {
     fn get(&self) { }
 }
 
-fn repeater3<'a,A:'a>(v: A) -> Box<Foo+'a> {
-    box v as Box<Foo+'a>
+fn repeater3<'a,A:'a>(v: A) -> Box<dyn Foo + 'a> {
+    box v as Box<dyn Foo+'a>
 }
 
 fn main() {
@@ -30,7 +20,8 @@ fn main() {
 
     let _ = {
         let tmp0 = 3;
-        let tmp1 = &tmp0; //~ ERROR `tmp0` does not live long enough
+        let tmp1 = &tmp0;
         repeater3(tmp1)
     };
+    //~^^^ ERROR `tmp0` does not live long enough
 }

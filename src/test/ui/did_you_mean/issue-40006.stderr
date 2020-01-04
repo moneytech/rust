@@ -1,68 +1,70 @@
-error: missing `fn`, `type`, or `const` for impl-item declaration
-  --> $DIR/issue-40006.rs:11:9
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:1:13
    |
-11 |   impl X {
-   |  _________^
-12 | |     Y
+LL |   impl dyn A {
+   |  _____________^
+LL | |     Y
    | |____^ missing `fn`, `type`, or `const`
 
-error: missing `fn`, `type`, or `const` for trait-item declaration
-  --> $DIR/issue-40006.rs:17:10
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:7:10
    |
-17 |   trait X {
+LL |   trait X {
    |  __________^
-18 | |     X() {}
+LL | |     X() {}
+   | |____^ missing `fn`, `type`, or `const`
+
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:15:10
+   |
+LL |   trait A {
+   |  __________^
+LL | |     X() {}
    | |____^ missing `fn`, `type`, or `const`
 
 error: expected `[`, found `#`
   --> $DIR/issue-40006.rs:19:17
    |
-19 |     fn xxx() { ### }
-   |                 ^
+LL |     fn xxx() { ### }
+   |                 ^ expected `[`
 
-error: missing `fn`, `type`, or `const` for trait-item declaration
-  --> $DIR/issue-40006.rs:19:21
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:21:10
    |
-19 |       fn xxx() { ### }
-   |  _____________________^
-20 | |     L = M;
+LL |   trait C {
+   |  __________^
+LL | |     L = M;
    | |____^ missing `fn`, `type`, or `const`
 
-error: missing `fn`, `type`, or `const` for trait-item declaration
-  --> $DIR/issue-40006.rs:20:11
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:24:10
    |
-20 |       L = M;
-   |  ___________^
-21 | |     Z = { 2 + 3 };
+LL |   trait D {
+   |  __________^
+LL | |     Z = { 2 + 3 };
    | |____^ missing `fn`, `type`, or `const`
-
-error: expected one of `const`, `extern`, `fn`, `type`, `unsafe`, or `}`, found `;`
-  --> $DIR/issue-40006.rs:21:18
-   |
-21 |     Z = { 2 + 3 };
-   |                  ^ expected one of `const`, `extern`, `fn`, `type`, `unsafe`, or `}` here
 
 error: expected one of `!` or `::`, found `(`
-  --> $DIR/issue-40006.rs:22:9
+  --> $DIR/issue-40006.rs:28:9
    |
-22 |     ::Y ();
-   |        -^ unexpected token
-   |        |
-   |        expected one of `!` or `::` here
+LL |     ::Y ();
+   |         ^ expected one of `!` or `::`
 
-error: missing `fn`, `type`, or `const` for impl-item declaration
-  --> $DIR/issue-40006.rs:26:8
+error: missing `fn`, `type`, or `const` for associated-item declaration
+  --> $DIR/issue-40006.rs:32:8
    |
-26 |     pub hello_method(&self) {
+LL |     pub hello_method(&self) {
    |        ^ missing `fn`, `type`, or `const`
 
-error[E0038]: the trait `X` cannot be made into an object
-  --> $DIR/issue-40006.rs:11:6
+error[E0599]: no method named `hello_method` found for type `S` in the current scope
+  --> $DIR/issue-40006.rs:38:7
    |
-11 | impl X {
-   |      ^ the trait `X` cannot be made into an object
-   |
-   = note: method `xxx` has no receiver
+LL | struct S;
+   | --------- method `hello_method` not found for this
+...
+LL |     S.hello_method();
+   |       ^^^^^^^^^^^^ method not found in `S`
 
-error: aborting due to previous error(s)
+error: aborting due to 9 previous errors
 
+For more information about this error, try `rustc --explain E0599`.

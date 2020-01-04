@@ -1,54 +1,45 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// revisions: rpass1 rpass2
+// revisions: cfail1 cfail2
 // compile-flags: -Z query-dep-graph
+// build-pass (FIXME(62277): could be check-pass?)
 
 #![allow(warnings)]
 #![feature(rustc_attrs)]
+#![crate_type = "rlib"]
 
 // Here the only thing which changes is the string constant in `x`.
 // Therefore, the compiler deduces (correctly) that typeck is not
 // needed even for callers of `x`.
 
-fn main() { }
 
-mod x {
-    #[cfg(rpass1)]
+pub mod x {
+    #[cfg(cfail1)]
     pub fn x() {
         println!("{}", "1");
     }
 
-    #[cfg(rpass2)]
-    #[rustc_dirty(label="TypeckTables", cfg="rpass2")]
-    #[rustc_dirty(label="TransCrateItem", cfg="rpass2")]
+    #[cfg(cfail2)]
+    #[rustc_dirty(label="HirBody", cfg="cfail2")]
+    #[rustc_dirty(label="optimized_mir", cfg="cfail2")]
     pub fn x() {
         println!("{}", "2");
     }
 }
 
-mod y {
+pub mod y {
     use x;
 
-    #[rustc_clean(label="TypeckTables", cfg="rpass2")]
-    #[rustc_clean(label="TransCrateItem", cfg="rpass2")]
+    #[rustc_clean(label="typeck_tables_of", cfg="cfail2")]
+    #[rustc_clean(label="optimized_mir", cfg="cfail2")]
     pub fn y() {
         x::x();
     }
 }
 
-mod z {
+pub mod z {
     use y;
 
-    #[rustc_clean(label="TypeckTables", cfg="rpass2")]
-    #[rustc_clean(label="TransCrateItem", cfg="rpass2")]
+    #[rustc_clean(label="typeck_tables_of", cfg="cfail2")]
+    #[rustc_clean(label="optimized_mir", cfg="cfail2")]
     pub fn z() {
         y::y();
     }

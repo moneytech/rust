@@ -1,23 +1,11 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Test the mechanism for warning about possible missing `self` declarations.
-// ignore-tidy-linelength
-
 trait CtxtFn {
-    fn f8(self, usize) -> usize;
-    fn f9(usize) -> usize; //~ NOTE candidate
+    fn f8(self, _: usize) -> usize;
+    fn f9(_: usize) -> usize;
 }
 
 trait OtherTrait {
-    fn f9(usize) -> usize; //~ NOTE candidate
+    fn f9(_: usize) -> usize;
 }
 
 // Note: this trait is not implemented, but we can't really tell
@@ -26,7 +14,7 @@ trait OtherTrait {
 // candidate. This seems not unreasonable -- perhaps the user meant to
 // implement it, after all.
 trait UnusedTrait {
-    fn f9(usize) -> usize; //~ NOTE candidate
+    fn f9(_: usize) -> usize;
 }
 
 impl CtxtFn for usize {
@@ -48,13 +36,13 @@ impl OtherTrait for usize {
 struct Myisize(isize);
 
 impl Myisize {
-    fn fff(i: isize) -> isize { //~ NOTE candidate
+    fn fff(i: isize) -> isize {
         i
     }
 }
 
 trait ManyImplTrait {
-    fn is_str() -> bool { //~ NOTE candidate
+    fn is_str() -> bool {
         false
     }
 }
@@ -73,19 +61,14 @@ impl ManyImplTrait for Myisize {}
 fn no_param_bound(u: usize, m: Myisize) -> usize {
     u.f8(42) + u.f9(342) + m.fff(42)
             //~^ ERROR no method named `f9` found for type `usize` in the current scope
-            //~| NOTE found the following associated functions; to be used as methods, functions must have a `self` parameter
-            //~| NOTE to use it here write `CtxtFn::f9(u, 342)` instead
             //~| ERROR no method named `fff` found for type `Myisize` in the current scope
-            //~| NOTE found the following associated functions; to be used as methods, functions must have a `self` parameter
-            //~| NOTE to use it here write `OtherTrait::f9(u, 342)` instead
-            //~| NOTE to use it here write `UnusedTrait::f9(u, 342)` instead
+
+
 }
 
 fn param_bound<T: ManyImplTrait>(t: T) -> bool {
     t.is_str()
     //~^ ERROR no method named `is_str` found for type `T` in the current scope
-    //~| NOTE found the following associated functions; to be used as methods, functions must have a `self` parameter
-    //~| NOTE to use it here write `ManyImplTrait::is_str(t)` instead
 }
 
 fn main() {

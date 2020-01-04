@@ -1,14 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-//
-// Original implementation taken from rust-memchr
+// Original implementation taken from rust-memchr.
 // Copyright 2015 Andrew Gallant, bluss and Nicolas Koch
 
 /// A safe interface to `memchr`.
@@ -20,11 +10,11 @@
 /// magnitude faster than `haystack.iter().position(|&b| b == needle)`.
 /// (See benchmarks.)
 ///
-/// # Example
+/// # Examples
 ///
 /// This shows how to find the first position of a byte in a byte string.
 ///
-/// ```rust,ignore
+/// ```ignore (cannot-doctest-private-modules)
 /// use memchr::memchr;
 ///
 /// let haystack = b"the quick brown fox";
@@ -32,7 +22,7 @@
 /// ```
 #[inline]
 pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
-    ::sys::memchr::memchr(needle, haystack)
+    crate::sys::memchr::memchr(needle, haystack)
 }
 
 /// A safe interface to `memrchr`.
@@ -40,11 +30,11 @@ pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
 /// Returns the index corresponding to the last occurrence of `needle` in
 /// `haystack`, or `None` if one is not found.
 ///
-/// # Example
+/// # Examples
 ///
 /// This shows how to find the last position of a byte in a byte string.
 ///
-/// ```rust,ignore
+/// ```ignore (cannot-doctest-private-modules)
 /// use memchr::memrchr;
 ///
 /// let haystack = b"the quick brown fox";
@@ -52,12 +42,12 @@ pub fn memchr(needle: u8, haystack: &[u8]) -> Option<usize> {
 /// ```
 #[inline]
 pub fn memrchr(needle: u8, haystack: &[u8]) -> Option<usize> {
-    ::sys::memchr::memrchr(needle, haystack)
+    crate::sys::memchr::memrchr(needle, haystack)
 }
 
 #[cfg(test)]
 mod tests {
-    // test the implementations for the current plattform
+    // test the implementations for the current platform
     use super::{memchr, memrchr};
 
     #[test]

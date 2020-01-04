@@ -1,13 +1,3 @@
-# Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
-
 import gdb
 import re
 import sys
@@ -18,6 +8,18 @@ import debugger_pretty_printers_common as rustpp
 # if we're running with Python 3 then we need to use `range` instead.
 if sys.version_info[0] >= 3:
     xrange = range
+
+rust_enabled = 'set language rust' in gdb.execute('complete set language ru', to_string = True)
+
+# The btree pretty-printers fail in a confusing way unless
+# https://sourceware.org/bugzilla/show_bug.cgi?id=21763 is fixed.
+# This fix went in 8.1, so check for that.
+# See https://github.com/rust-lang/rust/issues/56730
+gdb_81 = False
+_match = re.search('([0-9]+)\\.([0-9]+)', gdb.VERSION)
+if _match:
+    if int(_match.group(1)) > 8 or (int(_match.group(1)) == 8 and int(_match.group(2)) >= 1):
+        gdb_81 = True
 
 #===============================================================================
 # GDB Pretty Printing Module for Rust
@@ -100,6 +102,32 @@ def rust_pretty_printer_lookup_function(gdb_val):
     val = GdbValue(gdb_val)
     type_kind = val.type.get_type_kind()
 
+    if type_kind == rustpp.TYPE_KIND_SLICE:
+        return RustSlicePrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_STD_VEC:
+        return RustStdVecPrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_STD_VECDEQUE:
+        return RustStdVecDequePrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_STD_BTREESET and gdb_81:
+        return RustStdBTreeSetPrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_STD_BTREEMAP and gdb_81:
+        return RustStdBTreeMapPrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_STD_STRING:
+        return RustStdStringPrinter(val)
+
+    if type_kind == rustpp.TYPE_KIND_OS_STRING:
+        return RustOsStringPrinter(val)
+
+    # Checks after this point should only be for "compiler" types --
+    # things that gdb's Rust language support knows about.
+    if rust_enabled:
+        return None
+
     if type_kind == rustpp.TYPE_KIND_EMPTY:
         return RustEmptyPrinter(val)
 
@@ -115,20 +143,8 @@ def rust_pretty_printer_lookup_function(gdb_val):
                                  omit_type_name = False,
                                  is_tuple_like = False)
 
-    if type_kind == rustpp.TYPE_KIND_SLICE:
-        return RustSlicePrinter(val)
-
     if type_kind == rustpp.TYPE_KIND_STR_SLICE:
         return RustStringSlicePrinter(val)
-
-    if type_kind == rustpp.TYPE_KIND_STD_VEC:
-        return RustStdVecPrinter(val)
-
-    if type_kind == rustpp.TYPE_KIND_STD_STRING:
-        return RustStdStringPrinter(val)
-
-    if type_kind == rustpp.TYPE_KIND_OS_STRING:
-        return RustOsStringPrinter(val)
 
     if type_kind == rustpp.TYPE_KIND_TUPLE:
         return RustStructPrinter(val,
@@ -248,7 +264,10 @@ class RustStringSlicePrinter(object):
     def to_string(self):
         (length, data_ptr) = rustpp.extract_length_and_ptr_from_slice(self.__val)
         raw_ptr = data_ptr.get_wrapped_value()
-        return '"%s"' % raw_ptr.string(encoding="utf-8", length=length)
+        return raw_ptr.lazy_string(encoding="utf-8", length=length)
+
+    def display_hint(self):
+        return "string"
 
 
 class RustStdVecPrinter(object):
@@ -265,10 +284,118 @@ class RustStdVecPrinter(object):
                 ("(len: %i, cap: %i)" % (length, cap)))
 
     def children(self):
+        saw_inaccessible = False
         (length, data_ptr, cap) = rustpp.extract_length_ptr_and_cap_from_std_vec(self.__val)
         gdb_ptr = data_ptr.get_wrapped_value()
         for index in xrange(0, length):
-            yield (str(index), (gdb_ptr + index).dereference())
+            if saw_inaccessible:
+                return
+            try:
+                # rust-lang/rust#64343: passing deref expr to `str` allows
+                # catching exception on garbage pointer
+                str((gdb_ptr + index).dereference())
+                yield (str(index), (gdb_ptr + index).dereference())
+            except RuntimeError:
+                saw_inaccessible = True
+                yield (str(index), "inaccessible")
+
+
+class RustStdVecDequePrinter(object):
+    def __init__(self, val):
+        self.__val = val
+
+    @staticmethod
+    def display_hint():
+        return "array"
+
+    def to_string(self):
+        (tail, head, data_ptr, cap) = \
+            rustpp.extract_tail_head_ptr_and_cap_from_std_vecdeque(self.__val)
+        if head >= tail:
+            size = head - tail
+        else:
+            size = cap + head - tail
+        return (self.__val.type.get_unqualified_type_name() +
+                ("(len: %i, cap: %i)" % (size, cap)))
+
+    def children(self):
+        (tail, head, data_ptr, cap) = \
+            rustpp.extract_tail_head_ptr_and_cap_from_std_vecdeque(self.__val)
+        gdb_ptr = data_ptr.get_wrapped_value()
+        if head >= tail:
+            size = head - tail
+        else:
+            size = cap + head - tail
+        for index in xrange(0, size):
+            yield (str(index), (gdb_ptr + ((tail + index) % cap)).dereference())
+
+
+# Yield each key (and optionally value) from a BoxedNode.
+def children_of_node(boxed_node, height, want_values):
+    node_ptr = boxed_node['ptr']['pointer']
+    if height > 0:
+        type_name = str(node_ptr.type.target()).replace('LeafNode', 'InternalNode')
+        node_type = gdb.lookup_type(type_name)
+        node_ptr = node_ptr.cast(node_type.pointer())
+        leaf = node_ptr['data']
+    else:
+        leaf = node_ptr.dereference()
+    keys = leaf['keys']
+    if want_values:
+        values = leaf['vals']
+    length = int(leaf['len'])
+    for i in xrange(0, length + 1):
+        if height > 0:
+            child_ptr = node_ptr['edges'][i]['value']['value']
+            for child in children_of_node(child_ptr, height - 1, want_values):
+                yield child
+        if i < length:
+            if want_values:
+                yield (keys[i]['value']['value'], values[i]['value']['value'])
+            else:
+                yield keys[i]['value']['value']
+
+class RustStdBTreeSetPrinter(object):
+    def __init__(self, val):
+        self.__val = val
+
+    @staticmethod
+    def display_hint():
+        return "array"
+
+    def to_string(self):
+        return (self.__val.type.get_unqualified_type_name() +
+                ("(len: %i)" % self.__val.get_wrapped_value()['map']['length']))
+
+    def children(self):
+        root = self.__val.get_wrapped_value()['map']['root']
+        node_ptr = root['node']
+        i = 0
+        for child in children_of_node(node_ptr, root['height'], False):
+            yield (str(i), child)
+            i = i + 1
+
+
+class RustStdBTreeMapPrinter(object):
+    def __init__(self, val):
+        self.__val = val
+
+    @staticmethod
+    def display_hint():
+        return "map"
+
+    def to_string(self):
+        return (self.__val.type.get_unqualified_type_name() +
+                ("(len: %i)" % self.__val.get_wrapped_value()['length']))
+
+    def children(self):
+        root = self.__val.get_wrapped_value()['root']
+        node_ptr = root['node']
+        i = 0
+        for child in children_of_node(node_ptr, root['height'], True):
+            yield (str(i), child[0])
+            yield (str(i), child[1])
+            i = i + 1
 
 
 class RustStdStringPrinter(object):
@@ -278,8 +405,11 @@ class RustStdStringPrinter(object):
     def to_string(self):
         vec = self.__val.get_child_at_index(0)
         (length, data_ptr, cap) = rustpp.extract_length_ptr_and_cap_from_std_vec(vec)
-        return '"%s"' % data_ptr.get_wrapped_value().string(encoding="utf-8",
-                                                            length=length)
+        return data_ptr.get_wrapped_value().lazy_string(encoding="utf-8",
+                                                        length=length)
+
+    def display_hint(self):
+        return "string"
 
 
 class RustOsStringPrinter(object):
@@ -294,8 +424,10 @@ class RustOsStringPrinter(object):
 
         (length, data_ptr, cap) = rustpp.extract_length_ptr_and_cap_from_std_vec(
             vec)
-        return '"%s"' % data_ptr.get_wrapped_value().string(length=length)
+        return data_ptr.get_wrapped_value().lazy_string(length=length)
 
+    def display_hint(self):
+        return "string"
 
 class RustCStyleVariantPrinter(object):
     def __init__(self, val):

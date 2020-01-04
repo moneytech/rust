@@ -1,25 +1,15 @@
-// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! This module implements the `Any` trait, which enables dynamic typing
 //! of any `'static` type through runtime reflection.
 //!
 //! `Any` itself can be used to get a `TypeId`, and has more features when used
-//! as a trait object. As `&Any` (a borrowed trait object), it has the `is` and
-//! `downcast_ref` methods, to test if the contained value is of a given type,
-//! and to get a reference to the inner value as a type. As `&mut Any`, there
+//! as a trait object. As `&dyn Any` (a borrowed trait object), it has the `is`
+//! and `downcast_ref` methods, to test if the contained value is of a given type,
+//! and to get a reference to the inner value as a type. As `&mut dyn Any`, there
 //! is also the `downcast_mut` method, for getting a mutable reference to the
-//! inner value. `Box<Any>` adds the `downcast` method, which attempts to
+//! inner value. `Box<dyn Any>` adds the `downcast` method, which attempts to
 //! convert to a `Box<T>`. See the [`Box`] documentation for the full details.
 //!
-//! Note that &Any is limited to testing whether a value is of a specified
+//! Note that `&dyn Any` is limited to testing whether a value is of a specified
 //! concrete type, and cannot be used to test whether a type implements a trait.
 //!
 //! [`Box`]: ../../std/boxed/struct.Box.html
@@ -28,7 +18,7 @@
 //!
 //! Consider a situation where we want to log out a value passed to a function.
 //! We know the value we're working on implements Debug, but we don't know its
-//! concrete type.  We want to give special treatment to certain types: in this
+//! concrete type. We want to give special treatment to certain types: in this
 //! case printing out the length of String values prior to their value.
 //! We don't know the concrete type of our value at compile time, so we need to
 //! use runtime reflection instead.
@@ -39,10 +29,10 @@
 //!
 //! // Logger function for any type that implements Debug.
 //! fn log<T: Any + Debug>(value: &T) {
-//!     let value_any = value as &Any;
+//!     let value_any = value as &dyn Any;
 //!
-//!     // try to convert our value to a String.  If successful, we want to
-//!     // output the String's length as well as its value.  If not, it's a
+//!     // Try to convert our value to a `String`. If successful, we want to
+//!     // output the String`'s length as well as its value. If not, it's a
 //!     // different type: just print it out unadorned.
 //!     match value_any.downcast_ref::<String>() {
 //!         Some(as_string) => {
@@ -71,19 +61,29 @@
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use fmt;
-use intrinsics;
+use crate::fmt;
+use crate::intrinsics;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Any trait
 ///////////////////////////////////////////////////////////////////////////////
 
-/// A type to emulate dynamic typing.
+/// A trait to emulate dynamic typing.
 ///
 /// Most types implement `Any`. However, any type which contains a non-`'static` reference does not.
 /// See the [module-level documentation][mod] for more details.
 ///
 /// [mod]: index.html
+// This trait is not unsafe, though we rely on the specifics of it's sole impl's
+// `type_id` function in unsafe code (e.g., `downcast`). Normally, that would be
+// a problem, but because the only impl of `Any` is a blanket implementation, no
+// other code can implement `Any`.
+//
+// We could plausibly make this trait unsafe -- it would not cause breakage,
+// since we control all the implementations -- but we choose not to as that's
+// both not really necessary and may confuse users about the distinction of
+// unsafe traits and unsafe methods (i.e., `type_id` would still be safe to call,
+// but we would likely want to indicate as such in documentation).
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait Any: 'static {
     /// Gets the `TypeId` of `self`.
@@ -91,28 +91,24 @@ pub trait Any: 'static {
     /// # Examples
     ///
     /// ```
-    /// #![feature(get_type_id)]
-    ///
     /// use std::any::{Any, TypeId};
     ///
-    /// fn is_string(s: &Any) -> bool {
-    ///     TypeId::of::<String>() == s.get_type_id()
+    /// fn is_string(s: &dyn Any) -> bool {
+    ///     TypeId::of::<String>() == s.type_id()
     /// }
     ///
-    /// fn main() {
-    ///     assert_eq!(is_string(&0), false);
-    ///     assert_eq!(is_string(&"cookie monster".to_string()), true);
-    /// }
+    /// assert_eq!(is_string(&0), false);
+    /// assert_eq!(is_string(&"cookie monster".to_string()), true);
     /// ```
-    #[unstable(feature = "get_type_id",
-               reason = "this method will likely be replaced by an associated static",
-               issue = "27745")]
-    fn get_type_id(&self) -> TypeId;
+    #[stable(feature = "get_type_id", since = "1.34.0")]
+    fn type_id(&self) -> TypeId;
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<T: 'static + ?Sized > Any for T {
-    fn get_type_id(&self) -> TypeId { TypeId::of::<T>() }
+impl<T: 'static + ?Sized> Any for T {
+    fn type_id(&self) -> TypeId {
+        TypeId::of::<T>()
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -120,23 +116,30 @@ impl<T: 'static + ?Sized > Any for T {
 ///////////////////////////////////////////////////////////////////////////////
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl fmt::Debug for Any {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl fmt::Debug for dyn Any {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Any")
     }
 }
 
-// Ensure that the result of e.g. joining a thread can be printed and
+// Ensure that the result of e.g., joining a thread can be printed and
 // hence used with `unwrap`. May eventually no longer be needed if
 // dispatch works with upcasting.
 #[stable(feature = "rust1", since = "1.0.0")]
-impl fmt::Debug for Any + Send {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl fmt::Debug for dyn Any + Send {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Any")
     }
 }
 
-impl Any {
+#[stable(feature = "any_send_sync_methods", since = "1.28.0")]
+impl fmt::Debug for dyn Any + Send + Sync {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad("Any")
+    }
+}
+
+impl dyn Any {
     /// Returns `true` if the boxed type is the same as `T`.
     ///
     /// # Examples
@@ -144,7 +147,7 @@ impl Any {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn is_string(s: &Any) {
+    /// fn is_string(s: &dyn Any) {
     ///     if s.is::<String>() {
     ///         println!("It's a string!");
     ///     } else {
@@ -152,22 +155,20 @@ impl Any {
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     is_string(&0);
-    ///     is_string(&"cookie monster".to_string());
-    /// }
+    /// is_string(&0);
+    /// is_string(&"cookie monster".to_string());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
     pub fn is<T: Any>(&self) -> bool {
-        // Get TypeId of the type this function is instantiated with
+        // Get `TypeId` of the type this function is instantiated with.
         let t = TypeId::of::<T>();
 
-        // Get TypeId of the type in the trait object
-        let boxed = self.get_type_id();
+        // Get `TypeId` of the type in the trait object.
+        let concrete = self.type_id();
 
-        // Compare both TypeIds on equality
-        t == boxed
+        // Compare both `TypeId`s on equality.
+        t == concrete
     }
 
     /// Returns some reference to the boxed value if it is of type `T`, or
@@ -178,7 +179,7 @@ impl Any {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn print_if_string(s: &Any) {
+    /// fn print_if_string(s: &dyn Any) {
     ///     if let Some(string) = s.downcast_ref::<String>() {
     ///         println!("It's a string({}): '{}'", string.len(), string);
     ///     } else {
@@ -186,18 +187,15 @@ impl Any {
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     print_if_string(&0);
-    ///     print_if_string(&"cookie monster".to_string());
-    /// }
+    /// print_if_string(&0);
+    /// print_if_string(&"cookie monster".to_string());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
     pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
         if self.is::<T>() {
-            unsafe {
-                Some(&*(self as *const Any as *const T))
-            }
+            // SAFETY: just checked whether we are pointing to the correct type
+            unsafe { Some(&*(self as *const dyn Any as *const T)) }
         } else {
             None
         }
@@ -211,37 +209,34 @@ impl Any {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn modify_if_u32(s: &mut Any) {
+    /// fn modify_if_u32(s: &mut dyn Any) {
     ///     if let Some(num) = s.downcast_mut::<u32>() {
     ///         *num = 42;
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     let mut x = 10u32;
-    ///     let mut s = "starlord".to_string();
+    /// let mut x = 10u32;
+    /// let mut s = "starlord".to_string();
     ///
-    ///     modify_if_u32(&mut x);
-    ///     modify_if_u32(&mut s);
+    /// modify_if_u32(&mut x);
+    /// modify_if_u32(&mut s);
     ///
-    ///     assert_eq!(x, 42);
-    ///     assert_eq!(&s, "starlord");
-    /// }
+    /// assert_eq!(x, 42);
+    /// assert_eq!(&s, "starlord");
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
     pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         if self.is::<T>() {
-            unsafe {
-                Some(&mut *(self as *mut Any as *mut T))
-            }
+            // SAFETY: just checked whether we are pointing to the correct type
+            unsafe { Some(&mut *(self as *mut dyn Any as *mut T)) }
         } else {
             None
         }
     }
 }
 
-impl Any+Send {
+impl dyn Any + Send {
     /// Forwards to the method defined on the type `Any`.
     ///
     /// # Examples
@@ -249,7 +244,7 @@ impl Any+Send {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn is_string(s: &(Any + Send)) {
+    /// fn is_string(s: &(dyn Any + Send)) {
     ///     if s.is::<String>() {
     ///         println!("It's a string!");
     ///     } else {
@@ -257,10 +252,8 @@ impl Any+Send {
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     is_string(&0);
-    ///     is_string(&"cookie monster".to_string());
-    /// }
+    /// is_string(&0);
+    /// is_string(&"cookie monster".to_string());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -275,7 +268,7 @@ impl Any+Send {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn print_if_string(s: &(Any + Send)) {
+    /// fn print_if_string(s: &(dyn Any + Send)) {
     ///     if let Some(string) = s.downcast_ref::<String>() {
     ///         println!("It's a string({}): '{}'", string.len(), string);
     ///     } else {
@@ -283,10 +276,8 @@ impl Any+Send {
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     print_if_string(&0);
-    ///     print_if_string(&"cookie monster".to_string());
-    /// }
+    /// print_if_string(&0);
+    /// print_if_string(&"cookie monster".to_string());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -301,22 +292,20 @@ impl Any+Send {
     /// ```
     /// use std::any::Any;
     ///
-    /// fn modify_if_u32(s: &mut (Any+ Send)) {
+    /// fn modify_if_u32(s: &mut (dyn Any + Send)) {
     ///     if let Some(num) = s.downcast_mut::<u32>() {
     ///         *num = 42;
     ///     }
     /// }
     ///
-    /// fn main() {
-    ///     let mut x = 10u32;
-    ///     let mut s = "starlord".to_string();
+    /// let mut x = 10u32;
+    /// let mut s = "starlord".to_string();
     ///
-    ///     modify_if_u32(&mut x);
-    ///     modify_if_u32(&mut s);
+    /// modify_if_u32(&mut x);
+    /// modify_if_u32(&mut s);
     ///
-    ///     assert_eq!(x, 42);
-    ///     assert_eq!(&s, "starlord");
-    /// }
+    /// assert_eq!(x, 42);
+    /// assert_eq!(&s, "starlord");
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
@@ -325,6 +314,83 @@ impl Any+Send {
     }
 }
 
+impl dyn Any + Send + Sync {
+    /// Forwards to the method defined on the type `Any`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::Any;
+    ///
+    /// fn is_string(s: &(dyn Any + Send + Sync)) {
+    ///     if s.is::<String>() {
+    ///         println!("It's a string!");
+    ///     } else {
+    ///         println!("Not a string...");
+    ///     }
+    /// }
+    ///
+    /// is_string(&0);
+    /// is_string(&"cookie monster".to_string());
+    /// ```
+    #[stable(feature = "any_send_sync_methods", since = "1.28.0")]
+    #[inline]
+    pub fn is<T: Any>(&self) -> bool {
+        Any::is::<T>(self)
+    }
+
+    /// Forwards to the method defined on the type `Any`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::Any;
+    ///
+    /// fn print_if_string(s: &(dyn Any + Send + Sync)) {
+    ///     if let Some(string) = s.downcast_ref::<String>() {
+    ///         println!("It's a string({}): '{}'", string.len(), string);
+    ///     } else {
+    ///         println!("Not a string...");
+    ///     }
+    /// }
+    ///
+    /// print_if_string(&0);
+    /// print_if_string(&"cookie monster".to_string());
+    /// ```
+    #[stable(feature = "any_send_sync_methods", since = "1.28.0")]
+    #[inline]
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        Any::downcast_ref::<T>(self)
+    }
+
+    /// Forwards to the method defined on the type `Any`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::Any;
+    ///
+    /// fn modify_if_u32(s: &mut (dyn Any + Send + Sync)) {
+    ///     if let Some(num) = s.downcast_mut::<u32>() {
+    ///         *num = 42;
+    ///     }
+    /// }
+    ///
+    /// let mut x = 10u32;
+    /// let mut s = "starlord".to_string();
+    ///
+    /// modify_if_u32(&mut x);
+    /// modify_if_u32(&mut s);
+    ///
+    /// assert_eq!(x, 42);
+    /// assert_eq!(&s, "starlord");
+    /// ```
+    #[stable(feature = "any_send_sync_methods", since = "1.28.0")]
+    #[inline]
+    pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
+        Any::downcast_mut::<T>(self)
+    }
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // TypeID and its methods
@@ -341,7 +407,7 @@ impl Any+Send {
 ///
 /// While `TypeId` implements `Hash`, `PartialOrd`, and `Ord`, it is worth
 /// noting that the hashes and ordering will vary between Rust releases. Beware
-/// of relying on them outside of your code!
+/// of relying on them inside of your code!
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct TypeId {
@@ -361,15 +427,81 @@ impl TypeId {
     ///     TypeId::of::<String>() == TypeId::of::<T>()
     /// }
     ///
-    /// fn main() {
-    ///     assert_eq!(is_string(&0), false);
-    ///     assert_eq!(is_string(&"cookie monster".to_string()), true);
-    /// }
+    /// assert_eq!(is_string(&0), false);
+    /// assert_eq!(is_string(&"cookie monster".to_string()), true);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn of<T: ?Sized + 'static>() -> TypeId {
-        TypeId {
-            t: unsafe { intrinsics::type_id::<T>() },
-        }
+    #[rustc_const_unstable(feature = "const_type_id", issue = "41875")]
+    pub const fn of<T: ?Sized + 'static>() -> TypeId {
+        TypeId { t: intrinsics::type_id::<T>() }
     }
+}
+
+/// Returns the name of a type as a string slice.
+///
+/// # Note
+///
+/// This is intended for diagnostic use. The exact contents and format of the
+/// string are not specified, other than being a best-effort description of the
+/// type. For example, `type_name::<Option<String>>()` could return the
+/// `"Option<String>"` or `"std::option::Option<std::string::String>"`, but not
+/// `"foobar"`. In addition, the output may change between versions of the
+/// compiler.
+///
+/// The type name should not be considered a unique identifier of a type;
+/// multiple types may share the same type name.
+///
+/// The current implementation uses the same infrastructure as compiler
+/// diagnostics and debuginfo, but this is not guaranteed.
+///
+/// # Examples
+///
+/// ```rust
+/// assert_eq!(
+///     std::any::type_name::<Option<String>>(),
+///     "core::option::Option<alloc::string::String>",
+/// );
+/// ```
+#[stable(feature = "type_name", since = "1.38.0")]
+#[rustc_const_unstable(feature = "const_type_name", issue = "63084")]
+pub const fn type_name<T: ?Sized>() -> &'static str {
+    intrinsics::type_name::<T>()
+}
+
+/// Returns the name of the type of the pointed-to value as a string slice.
+/// This is the same as `type_name::<T>()`, but can be used where the type of a
+/// variable is not easily available.
+///
+/// # Note
+///
+/// This is intended for diagnostic use. The exact contents and format of the
+/// string are not specified, other than being a best-effort description of the
+/// type. For example, `type_name_of::<Option<String>>(None)` could return
+/// `"Option<String>"` or `"std::option::Option<std::string::String>"`, but not
+/// `"foobar"`. In addition, the output may change between versions of the
+/// compiler.
+///
+/// The type name should not be considered a unique identifier of a type;
+/// multiple types may share the same type name.
+///
+/// The current implementation uses the same infrastructure as compiler
+/// diagnostics and debuginfo, but this is not guaranteed.
+///
+/// # Examples
+///
+/// Prints the default integer and float types.
+///
+/// ```rust
+/// #![feature(type_name_of_val)]
+/// use std::any::type_name_of_val;
+///
+/// let x = 1;
+/// println!("{}", type_name_of_val(&x));
+/// let y = 1.0;
+/// println!("{}", type_name_of_val(&y));
+/// ```
+#[unstable(feature = "type_name_of_val", issue = "66359")]
+#[rustc_const_unstable(feature = "const_type_name", issue = "63084")]
+pub const fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
+    type_name::<T>()
 }

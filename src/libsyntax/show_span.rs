@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Span debugger
 //!
 //! This module shows spans for all expressions in the crate
@@ -15,10 +5,9 @@
 
 use std::str::FromStr;
 
-use ast;
-use errors;
-use visit;
-use visit::Visitor;
+use crate::ast;
+use crate::visit;
+use crate::visit::Visitor;
 
 enum Mode {
     Expression,
@@ -33,7 +22,7 @@ impl FromStr for Mode {
             "expr" => Mode::Expression,
             "pat" => Mode::Pattern,
             "ty" => Mode::Type,
-            _ => return Err(())
+            _ => return Err(()),
         };
         Ok(mode)
     }
@@ -71,16 +60,11 @@ impl<'a> Visitor<'a> for ShowSpanVisitor<'a> {
     }
 }
 
-pub fn run(span_diagnostic: &errors::Handler,
-           mode: &str,
-           krate: &ast::Crate) {
+pub fn run(span_diagnostic: &errors::Handler, mode: &str, krate: &ast::Crate) {
     let mode = match mode.parse().ok() {
         Some(mode) => mode,
-        None => return
+        None => return,
     };
-    let mut v = ShowSpanVisitor {
-        span_diagnostic: span_diagnostic,
-        mode: mode,
-    };
+    let mut v = ShowSpanVisitor { span_diagnostic, mode };
     visit::walk_crate(&mut v, krate);
 }

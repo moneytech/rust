@@ -1,29 +1,23 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-//! Global initialization and retreival of command line arguments.
+//! Global initialization and retrieval of command line arguments.
 //!
 //! On some platforms these are stored during runtime startup,
 //! and on some they are retrieved from the system on demand.
 
 #![allow(dead_code)] // runtime init functions not used during testing
 
-use ffi::OsString;
-use marker::PhantomData;
-use vec;
+use crate::ffi::OsString;
+use crate::marker::PhantomData;
+use crate::vec;
 
 /// One-time global initialization.
-pub unsafe fn init(argc: isize, argv: *const *const u8) { imp::init(argc, argv) }
+pub unsafe fn init(argc: isize, argv: *const *const u8) {
+    imp::init(argc, argv)
+}
 
 /// One-time global cleanup.
-pub unsafe fn cleanup() { imp::cleanup() }
+pub unsafe fn cleanup() {
+    imp::cleanup()
+}
 
 /// Returns the command line arguments
 pub fn args() -> Args {
@@ -35,121 +29,153 @@ pub struct Args {
     _dont_send_or_sync_me: PhantomData<*mut ()>,
 }
 
+impl Args {
+    pub fn inner_debug(&self) -> &[OsString] {
+        self.iter.as_slice()
+    }
+}
+
 impl Iterator for Args {
     type Item = OsString;
-    fn next(&mut self) -> Option<OsString> { self.iter.next() }
-    fn size_hint(&self) -> (usize, Option<usize>) { self.iter.size_hint() }
+    fn next(&mut self) -> Option<OsString> {
+        self.iter.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
 
 impl ExactSizeIterator for Args {
-    fn len(&self) -> usize { self.iter.len() }
+    fn len(&self) -> usize {
+        self.iter.len()
+    }
 }
 
 impl DoubleEndedIterator for Args {
-    fn next_back(&mut self) -> Option<OsString> { self.iter.next_back() }
+    fn next_back(&mut self) -> Option<OsString> {
+        self.iter.next_back()
+    }
 }
 
-#[cfg(any(target_os = "linux",
-          target_os = "android",
-          target_os = "freebsd",
-          target_os = "dragonfly",
-          target_os = "bitrig",
-          target_os = "netbsd",
-          target_os = "openbsd",
-          target_os = "solaris",
-          target_os = "emscripten",
-          target_os = "haiku",
-          target_os = "fuchsia"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "solaris",
+    target_os = "emscripten",
+    target_os = "haiku",
+    target_os = "l4re",
+    target_os = "fuchsia",
+    target_os = "redox"
+))]
 mod imp {
-    use os::unix::prelude::*;
-    use mem;
-    use ffi::{CStr, OsString};
-    use marker::PhantomData;
-    use libc;
     use super::Args;
+    use crate::ffi::{CStr, OsString};
+    use crate::marker::PhantomData;
+    use crate::os::unix::prelude::*;
+    use crate::ptr;
 
-    use sys_common::mutex::Mutex;
+    use crate::sys_common::mutex::Mutex;
 
-    static mut GLOBAL_ARGS_PTR: usize = 0;
+    static mut ARGC: isize = 0;
+    static mut ARGV: *const *const u8 = ptr::null();
+    // We never call `ENV_LOCK.init()`, so it is UB to attempt to
+    // acquire this mutex reentrantly!
     static LOCK: Mutex = Mutex::new();
 
-    pub unsafe fn init(argc: isize, argv: *const *const u8) {
-        let args = (0..argc).map(|i| {
-            CStr::from_ptr(*argv.offset(i) as *const libc::c_char).to_bytes().to_vec()
-        }).collect();
-
-        LOCK.lock();
-        let ptr = get_global_ptr();
-        assert!((*ptr).is_none());
-        (*ptr) = Some(box args);
-        LOCK.unlock();
+    unsafe fn really_init(argc: isize, argv: *const *const u8) {
+        let _guard = LOCK.lock();
+        ARGC = argc;
+        ARGV = argv;
     }
 
+    #[inline(always)]
+    pub unsafe fn init(_argc: isize, _argv: *const *const u8) {
+        // On Linux-GNU, we rely on `ARGV_INIT_ARRAY` below to initialize
+        // `ARGC` and `ARGV`. But in Miri that does not actually happen so we
+        // still initialize here.
+        #[cfg(any(miri, not(all(target_os = "linux", target_env = "gnu"))))]
+        really_init(_argc, _argv);
+    }
+
+    /// glibc passes argc, argv, and envp to functions in .init_array, as a non-standard extension.
+    /// This allows `std::env::args` to work even in a `cdylib`, as it does on macOS and Windows.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[used]
+    #[link_section = ".init_array.00099"]
+    static ARGV_INIT_ARRAY: extern "C" fn(
+        crate::os::raw::c_int,
+        *const *const u8,
+        *const *const u8,
+    ) = {
+        extern "C" fn init_wrapper(
+            argc: crate::os::raw::c_int,
+            argv: *const *const u8,
+            _envp: *const *const u8,
+        ) {
+            unsafe {
+                really_init(argc as isize, argv);
+            }
+        }
+        init_wrapper
+    };
+
     pub unsafe fn cleanup() {
-        LOCK.lock();
-        *get_global_ptr() = None;
-        LOCK.unlock();
+        let _guard = LOCK.lock();
+        ARGC = 0;
+        ARGV = ptr::null();
     }
 
     pub fn args() -> Args {
-        let bytes = clone().unwrap_or(Vec::new());
-        let v: Vec<OsString> = bytes.into_iter().map(|v| {
-            OsStringExt::from_vec(v)
-        }).collect();
-        Args { iter: v.into_iter(), _dont_send_or_sync_me: PhantomData }
+        Args { iter: clone().into_iter(), _dont_send_or_sync_me: PhantomData }
     }
 
-    fn clone() -> Option<Vec<Vec<u8>>> {
+    fn clone() -> Vec<OsString> {
         unsafe {
-            LOCK.lock();
-            let ptr = get_global_ptr();
-            let ret = (*ptr).as_ref().map(|s| (**s).clone());
-            LOCK.unlock();
-            return ret
+            let _guard = LOCK.lock();
+            (0..ARGC)
+                .map(|i| {
+                    let cstr = CStr::from_ptr(*ARGV.offset(i) as *const libc::c_char);
+                    OsStringExt::from_vec(cstr.to_bytes().to_vec())
+                })
+                .collect()
         }
     }
-
-    fn get_global_ptr() -> *mut Option<Box<Vec<Vec<u8>>>> {
-        unsafe { mem::transmute(&GLOBAL_ARGS_PTR) }
-    }
-
 }
 
-#[cfg(any(target_os = "macos",
-          target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod imp {
-    use ffi::CStr;
-    use marker::PhantomData;
-    use libc;
     use super::Args;
+    use crate::ffi::CStr;
+    use crate::marker::PhantomData;
 
-    pub unsafe fn init(_argc: isize, _argv: *const *const u8) {
-    }
+    pub unsafe fn init(_argc: isize, _argv: *const *const u8) {}
 
-    pub fn cleanup() {
-    }
+    pub fn cleanup() {}
 
     #[cfg(target_os = "macos")]
     pub fn args() -> Args {
-        use os::unix::prelude::*;
-        extern {
+        use crate::os::unix::prelude::*;
+        extern "C" {
             // These functions are in crt_externs.h.
             fn _NSGetArgc() -> *mut libc::c_int;
             fn _NSGetArgv() -> *mut *mut *mut libc::c_char;
         }
 
         let vec = unsafe {
-            let (argc, argv) = (*_NSGetArgc() as isize,
-                                *_NSGetArgv() as *const *const libc::c_char);
-            (0.. argc as isize).map(|i| {
-                let bytes = CStr::from_ptr(*argv.offset(i)).to_bytes().to_vec();
-                OsStringExt::from_vec(bytes)
-            }).collect::<Vec<_>>()
+            let (argc, argv) =
+                (*_NSGetArgc() as isize, *_NSGetArgv() as *const *const libc::c_char);
+            (0..argc as isize)
+                .map(|i| {
+                    let bytes = CStr::from_ptr(*argv.offset(i)).to_bytes().to_vec();
+                    OsStringExt::from_vec(bytes)
+                })
+                .collect::<Vec<_>>()
         };
-        Args {
-            iter: vec.into_iter(),
-            _dont_send_or_sync_me: PhantomData,
-        }
+        Args { iter: vec.into_iter(), _dont_send_or_sync_me: PhantomData }
     }
 
     // As _NSGetArgc and _NSGetArgv aren't mentioned in iOS docs
@@ -166,26 +192,26 @@ mod imp {
     // res
     #[cfg(target_os = "ios")]
     pub fn args() -> Args {
-        use ffi::OsString;
-        use mem;
-        use str;
+        use crate::ffi::OsString;
+        use crate::mem;
+        use crate::str;
 
-        extern {
+        extern "C" {
             fn sel_registerName(name: *const libc::c_uchar) -> Sel;
             fn objc_getClass(class_name: *const libc::c_uchar) -> NsId;
         }
 
-        #[cfg(target_arch="aarch64")]
-        extern {
+        #[cfg(target_arch = "aarch64")]
+        extern "C" {
             fn objc_msgSend(obj: NsId, sel: Sel) -> NsId;
-            #[link_name="objc_msgSend"]
+            #[link_name = "objc_msgSend"]
             fn objc_msgSend_ul(obj: NsId, sel: Sel, i: libc::c_ulong) -> NsId;
         }
 
-        #[cfg(not(target_arch="aarch64"))]
-        extern {
+        #[cfg(not(target_arch = "aarch64"))]
+        extern "C" {
             fn objc_msgSend(obj: NsId, sel: Sel, ...) -> NsId;
-            #[link_name="objc_msgSend"]
+            #[link_name = "objc_msgSend"]
             fn objc_msgSend_ul(obj: NsId, sel: Sel, ...) -> NsId;
         }
 
@@ -208,8 +234,7 @@ mod imp {
             let cnt: usize = mem::transmute(objc_msgSend(args, count_sel));
             for i in 0..cnt {
                 let tmp = objc_msgSend_ul(args, object_at_sel, i as libc::c_ulong);
-                let utf_c_str: *const libc::c_char =
-                    mem::transmute(objc_msgSend(tmp, utf8_sel));
+                let utf_c_str: *const libc::c_char = mem::transmute(objc_msgSend(tmp, utf8_sel));
                 let bytes = CStr::from_ptr(utf_c_str).to_bytes();
                 res.push(OsString::from(str::from_utf8(bytes).unwrap()))
             }

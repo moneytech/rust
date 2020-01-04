@@ -1,17 +1,7 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // See src/libstd/primitive_docs.rs for documentation.
 
-use cmp::*;
-use cmp::Ordering::*;
+use crate::cmp::Ordering::*;
+use crate::cmp::*;
 
 // macro for implementing n-ary tuple functions and operations
 macro_rules! tuple_impls {
@@ -22,14 +12,7 @@ macro_rules! tuple_impls {
     )+) => {
         $(
             #[stable(feature = "rust1", since = "1.0.0")]
-            impl<$($T:Clone),+> Clone for ($($T,)+) {
-                fn clone(&self) -> ($($T,)+) {
-                    ($(self.$idx.clone(),)+)
-                }
-            }
-
-            #[stable(feature = "rust1", since = "1.0.0")]
-            impl<$($T:PartialEq),+> PartialEq for ($($T,)+) {
+            impl<$($T:PartialEq),+> PartialEq for ($($T,)+) where last_type!($($T,)+): ?Sized {
                 #[inline]
                 fn eq(&self, other: &($($T,)+)) -> bool {
                     $(self.$idx == other.$idx)&&+
@@ -41,10 +24,11 @@ macro_rules! tuple_impls {
             }
 
             #[stable(feature = "rust1", since = "1.0.0")]
-            impl<$($T:Eq),+> Eq for ($($T,)+) {}
+            impl<$($T:Eq),+> Eq for ($($T,)+) where last_type!($($T,)+): ?Sized {}
 
             #[stable(feature = "rust1", since = "1.0.0")]
-            impl<$($T:PartialOrd + PartialEq),+> PartialOrd for ($($T,)+) {
+            impl<$($T:PartialOrd + PartialEq),+> PartialOrd for ($($T,)+)
+                    where last_type!($($T,)+): ?Sized {
                 #[inline]
                 fn partial_cmp(&self, other: &($($T,)+)) -> Option<Ordering> {
                     lexical_partial_cmp!($(self.$idx, other.$idx),+)
@@ -68,7 +52,7 @@ macro_rules! tuple_impls {
             }
 
             #[stable(feature = "rust1", since = "1.0.0")]
-            impl<$($T:Ord),+> Ord for ($($T,)+) {
+            impl<$($T:Ord),+> Ord for ($($T,)+) where last_type!($($T,)+): ?Sized {
                 #[inline]
                 fn cmp(&self, other: &($($T,)+)) -> Ordering {
                     lexical_cmp!($(self.$idx, other.$idx),+)
@@ -116,6 +100,11 @@ macro_rules! lexical_cmp {
         }
     };
     ($a:expr, $b:expr) => { ($a).cmp(&$b) };
+}
+
+macro_rules! last_type {
+    ($a:ident,) => { $a };
+    ($a:ident, $($rest_a:ident,)+) => { last_type!($($rest_a,)+) };
 }
 
 tuple_impls! {

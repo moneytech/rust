@@ -2,6 +2,7 @@
 authors = ["The Rust Project Developers"]
 name = "rustc_driver"
 version = "0.0.0"
+edition = "2018"
 
 [lib]
 name = "rustc_driver"
@@ -9,29 +10,28 @@ path = "lib.rs"
 crate-type = ["dylib"]
 
 [dependencies]
-arena = { path = "../libarena" }
 graphviz = { path = "../libgraphviz" }
-log = { version = "0.3", features = ["release_max_level_info"] }
-env_logger = { version = "0.4", default-features = false }
-proc_macro_plugin = { path = "../libproc_macro_plugin" }
+lazy_static = "1.0"
+log = "0.4"
+env_logger = { version = "0.7", default-features = false }
 rustc = { path = "../librustc" }
-rustc_back = { path = "../librustc_back" }
-rustc_borrowck = { path = "../librustc_borrowck" }
-rustc_const_eval = { path = "../librustc_const_eval" }
-rustc_data_structures = { path = "../librustc_data_structures" }
-rustc_errors = { path = "../librustc_errors" }
-rustc_incremental = { path = "../librustc_incremental" }
+rustc_target = { path = "../librustc_target" }
 rustc_lint = { path = "../librustc_lint" }
+rustc_data_structures = { path = "../librustc_data_structures" }
+errors = { path = "../librustc_errors", package = "rustc_errors" }
+rustc_feature = { path = "../librustc_feature" }
 rustc_metadata = { path = "../librustc_metadata" }
 rustc_mir = { path = "../librustc_mir" }
-rustc_passes = { path = "../librustc_passes" }
-rustc_plugin = { path = "../librustc_plugin" }
-rustc_privacy = { path = "../librustc_privacy" }
-rustc_resolve = { path = "../librustc_resolve" }
+rustc_parse = { path = "../librustc_parse" }
+rustc_plugin_impl = { path = "../librustc_plugin_impl" }
 rustc_save_analysis = { path = "../librustc_save_analysis" }
-rustc_trans = { path = "../librustc_trans" }
-rustc_typeck = { path = "../librustc_typeck" }
-serialize = { path = "../libserialize" }
+rustc_codegen_utils = { path = "../librustc_codegen_utils" }
+rustc_error_codes = { path = "../librustc_error_codes" }
+rustc_interface = { path = "../librustc_interface" }
+rustc_serialize = { path = "../libserialize", package = "serialize" }
+rustc_resolve = { path = "../librustc_resolve" }
 syntax = { path = "../libsyntax" }
-syntax_ext = { path = "../libsyntax_ext" }
-syntax_pos = { path = "../libsyntax_pos" }
+rustc_span = { path = "../librustc_span" }
+
+[features]
+llvm = ['rustc_interface/llvm']

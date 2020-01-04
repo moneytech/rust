@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM ubuntu:19.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   g++ \
@@ -7,23 +7,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   ca-certificates \
   python2.7 \
+  python2.7-dev \
+  libxml2-dev \
+  libncurses-dev \
+  libedit-dev \
+  swig \
+  doxygen \
   git \
   cmake \
   sudo \
   gdb \
-  xz-utils
+  libssl-dev \
+  pkg-config \
+  xz-utils \
+  lld \
+  clang
 
-RUN curl -o /usr/local/bin/sccache \
-      https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/2017-05-12-sccache-x86_64-unknown-linux-musl && \
-      chmod +x /usr/local/bin/sccache
+COPY scripts/sccache.sh /scripts/
+RUN sh /scripts/sccache.sh
 
-RUN curl -OL https://github.com/Yelp/dumb-init/releases/download/v1.2.0/dumb-init_1.2.0_amd64.deb && \
-    dpkg -i dumb-init_*.deb && \
-    rm dumb-init_*.deb
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+ENV RUSTBUILD_FORCE_CLANG_BASED_TESTS 1
+ENV RUN_CHECK_WITH_PARALLEL_QUERIES 1
 
 ENV RUST_CONFIGURE_ARGS \
       --build=x86_64-unknown-linux-gnu \
       --enable-debug \
-      --enable-optimize
-ENV SCRIPT python2.7 ../x.py build
+      --enable-lld \
+      --enable-optimize \
+      --set llvm.use-linker=lld \
+      --set target.x86_64-unknown-linux-gnu.linker=clang \
+      --set target.x86_64-unknown-linux-gnu.cc=clang \
+      --set target.x86_64-unknown-linux-gnu.cxx=clang++
+
+ENV SCRIPT \
+  python2.7 ../x.py build && \
+  python2.7 ../x.py test src/test/run-make-fulldeps --test-args clang

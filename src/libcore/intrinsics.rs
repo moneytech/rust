@@ -1,16 +1,22 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-//! rustc compiler intrinsics.
+//! Compiler intrinsics.
 //!
-//! The corresponding definitions are in librustc_trans/intrinsic.rs.
+//! The corresponding definitions are in `librustc_codegen_llvm/intrinsic.rs`.
+//! The corresponding const implementations are in `librustc_mir/interpret/intrinsics.rs`
+//!
+//! # Const intrinsics
+//!
+//! Note: any changes to the constness of intrinsics should be discussed with the language team.
+//! This includes changes in the stability of the constness.
+//!
+//! In order to make an intrinsic usable at compile-time, one needs to copy the implementation
+//! from https://github.com/rust-lang/miri/blob/master/src/shims/intrinsics.rs to
+//! `librustc_mir/interpret/intrinsics.rs` and add a
+//! `#[rustc_const_unstable(feature = "foo", issue = "01234")]` to the intrinsic.
+//!
+//! If an intrinsic is supposed to be used from a `const fn` with a `rustc_const_stable` attribute,
+//! the intrinsic's attribute must be `rustc_const_stable`, too. Such a change should not be done
+//! without T-lang consulation, because it bakes a feature into the language that cannot be
+//! replicated in user code without compiler support.
 //!
 //! # Volatiles
 //!
@@ -39,20 +45,26 @@
 //!   guaranteed to happen in order. This is the standard mode for working
 //!   with atomic types and is equivalent to Java's `volatile`.
 
-#![unstable(feature = "core_intrinsics",
-            reason = "intrinsics are unlikely to ever be stabilized, instead \
+#![unstable(
+    feature = "core_intrinsics",
+    reason = "intrinsics are unlikely to ever be stabilized, instead \
                       they should be used through stabilized interfaces \
                       in the rest of the standard library",
-            issue = "0")]
+    issue = "none"
+)]
 #![allow(missing_docs)]
 
+use crate::mem;
+
 #[stable(feature = "drop_in_place", since = "1.8.0")]
-#[rustc_deprecated(reason = "no longer an intrinsic - use `ptr::drop_in_place` directly",
-                   since = "1.18.0")]
-pub use ptr::drop_in_place;
+#[rustc_deprecated(
+    reason = "no longer an intrinsic - use `ptr::drop_in_place` directly",
+    since = "1.18.0"
+)]
+pub use crate::ptr::drop_in_place;
 
 extern "rust-intrinsic" {
-    // NB: These intrinsics take raw pointers because they mutate aliased
+    // N.B., these intrinsics take raw pointers because they mutate aliased
     // memory, which is not valid for either `&` or `&mut`.
 
     /// Stores a value if the current value is the same as the `old` value.
@@ -325,35 +337,35 @@ extern "rust-intrinsic" {
     /// [`AtomicBool::swap`](../../std/sync/atomic/struct.AtomicBool.html#method.swap).
     pub fn atomic_xchg_relaxed<T>(dst: *mut T, src: T) -> T;
 
-    /// Add to the current value, returning the previous value.
+    /// Adds to the current value, returning the previous value.
     /// The stabilized version of this intrinsic is available on the
     /// `std::sync::atomic` types via the `fetch_add` method by passing
     /// [`Ordering::SeqCst`](../../std/sync/atomic/enum.Ordering.html)
     /// as the `order`. For example,
     /// [`AtomicIsize::fetch_add`](../../std/sync/atomic/struct.AtomicIsize.html#method.fetch_add).
     pub fn atomic_xadd<T>(dst: *mut T, src: T) -> T;
-    /// Add to the current value, returning the previous value.
+    /// Adds to the current value, returning the previous value.
     /// The stabilized version of this intrinsic is available on the
     /// `std::sync::atomic` types via the `fetch_add` method by passing
     /// [`Ordering::Acquire`](../../std/sync/atomic/enum.Ordering.html)
     /// as the `order`. For example,
     /// [`AtomicIsize::fetch_add`](../../std/sync/atomic/struct.AtomicIsize.html#method.fetch_add).
     pub fn atomic_xadd_acq<T>(dst: *mut T, src: T) -> T;
-    /// Add to the current value, returning the previous value.
+    /// Adds to the current value, returning the previous value.
     /// The stabilized version of this intrinsic is available on the
     /// `std::sync::atomic` types via the `fetch_add` method by passing
     /// [`Ordering::Release`](../../std/sync/atomic/enum.Ordering.html)
     /// as the `order`. For example,
     /// [`AtomicIsize::fetch_add`](../../std/sync/atomic/struct.AtomicIsize.html#method.fetch_add).
     pub fn atomic_xadd_rel<T>(dst: *mut T, src: T) -> T;
-    /// Add to the current value, returning the previous value.
+    /// Adds to the current value, returning the previous value.
     /// The stabilized version of this intrinsic is available on the
     /// `std::sync::atomic` types via the `fetch_add` method by passing
     /// [`Ordering::AcqRel`](../../std/sync/atomic/enum.Ordering.html)
     /// as the `order`. For example,
     /// [`AtomicIsize::fetch_add`](../../std/sync/atomic/struct.AtomicIsize.html#method.fetch_add).
     pub fn atomic_xadd_acqrel<T>(dst: *mut T, src: T) -> T;
-    /// Add to the current value, returning the previous value.
+    /// Adds to the current value, returning the previous value.
     /// The stabilized version of this intrinsic is available on the
     /// `std::sync::atomic` types via the `fetch_add` method by passing
     /// [`Ordering::Relaxed`](../../std/sync/atomic/enum.Ordering.html)
@@ -566,52 +578,38 @@ extern "rust-intrinsic" {
     pub fn atomic_umax_relaxed<T>(dst: *mut T, src: T) -> T;
 
     /// The `prefetch` intrinsic is a hint to the code generator to insert a prefetch instruction
-    /// if supported; otherwise, it is a noop.
+    /// if supported; otherwise, it is a no-op.
     /// Prefetches have no effect on the behavior of the program but can change its performance
     /// characteristics.
     ///
     /// The `locality` argument must be a constant integer and is a temporal locality specifier
     /// ranging from (0) - no locality, to (3) - extremely local keep in cache
-    #[cfg(not(stage0))]
     pub fn prefetch_read_data<T>(data: *const T, locality: i32);
     /// The `prefetch` intrinsic is a hint to the code generator to insert a prefetch instruction
-    /// if supported; otherwise, it is a noop.
+    /// if supported; otherwise, it is a no-op.
     /// Prefetches have no effect on the behavior of the program but can change its performance
     /// characteristics.
     ///
     /// The `locality` argument must be a constant integer and is a temporal locality specifier
     /// ranging from (0) - no locality, to (3) - extremely local keep in cache
-    #[cfg(not(stage0))]
     pub fn prefetch_write_data<T>(data: *const T, locality: i32);
     /// The `prefetch` intrinsic is a hint to the code generator to insert a prefetch instruction
-    /// if supported; otherwise, it is a noop.
+    /// if supported; otherwise, it is a no-op.
     /// Prefetches have no effect on the behavior of the program but can change its performance
     /// characteristics.
     ///
     /// The `locality` argument must be a constant integer and is a temporal locality specifier
     /// ranging from (0) - no locality, to (3) - extremely local keep in cache
-    #[cfg(not(stage0))]
     pub fn prefetch_read_instruction<T>(data: *const T, locality: i32);
     /// The `prefetch` intrinsic is a hint to the code generator to insert a prefetch instruction
-    /// if supported; otherwise, it is a noop.
+    /// if supported; otherwise, it is a no-op.
     /// Prefetches have no effect on the behavior of the program but can change its performance
     /// characteristics.
     ///
     /// The `locality` argument must be a constant integer and is a temporal locality specifier
     /// ranging from (0) - no locality, to (3) - extremely local keep in cache
-    #[cfg(not(stage0))]
     pub fn prefetch_write_instruction<T>(data: *const T, locality: i32);
 }
-
-// Empty bootstrap implementations for stage0 compilation
-#[cfg(stage0)]
-pub fn prefetch_read_data<T>(_data: *const T, _locality: i32) { /* EMPTY */ }
-#[cfg(stage0)]
-pub fn prefetch_write_data<T>(_data: *const T, _locality: i32) { /* EMPTY */ }
-#[cfg(stage0)]
-pub fn prefetch_read_instruction<T>(_data: *const T, _locality: i32) { /* EMPTY */ }
-#[cfg(stage0)]
-pub fn prefetch_write_instruction<T>(_data: *const T, _locality: i32) { /* EMPTY */ }
 
 extern "rust-intrinsic" {
 
@@ -641,12 +639,20 @@ extern "rust-intrinsic" {
     pub fn rustc_peek<T>(_: T) -> T;
 
     /// Aborts the execution of the process.
+    ///
+    /// The stabilized version of this intrinsic is
+    /// [`std::process::abort`](../../std/process/fn.abort.html)
     pub fn abort() -> !;
 
-    /// Tells LLVM that this point in the code is not reachable,
-    /// enabling further optimizations.
+    /// Tells LLVM that this point in the code is not reachable, enabling
+    /// further optimizations.
     ///
-    /// NB: This is very different from the `unreachable!()` macro!
+    /// N.B., this is very different from the `unreachable!()` macro: Unlike the
+    /// macro, which panics when it is executed, it is *undefined behavior* to
+    /// reach code marked with this function.
+    ///
+    /// The stabilized version of this intrinsic is
+    /// [`std::hint::unreachable_unchecked`](../../std/hint/fn.unreachable_unchecked.html).
     pub fn unreachable() -> !;
 
     /// Informs the optimizer that a condition is always true.
@@ -678,6 +684,10 @@ extern "rust-intrinsic" {
     ///
     /// More specifically, this is the offset in bytes between successive
     /// items of the same type, including alignment padding.
+    ///
+    /// The stabilized version of this intrinsic is
+    /// [`std::mem::size_of`](../../std/mem/fn.size_of.html).
+    #[rustc_const_stable(feature = "const_size_of", since = "1.40.0")]
     pub fn size_of<T>() -> usize;
 
     /// Moves a value to an uninitialized memory location.
@@ -685,26 +695,50 @@ extern "rust-intrinsic" {
     /// Drop glue is not run on the destination.
     pub fn move_val_init<T>(dst: *mut T, src: T);
 
+    #[rustc_const_stable(feature = "const_min_align_of", since = "1.40.0")]
     pub fn min_align_of<T>() -> usize;
+    #[rustc_const_unstable(feature = "const_pref_align_of", issue = "none")]
     pub fn pref_align_of<T>() -> usize;
 
+    /// The size of the referenced value in bytes.
+    ///
+    /// The stabilized version of this intrinsic is
+    /// [`std::mem::size_of_val`](../../std/mem/fn.size_of_val.html).
     pub fn size_of_val<T: ?Sized>(_: &T) -> usize;
     pub fn min_align_of_val<T: ?Sized>(_: &T) -> usize;
 
     /// Gets a static string slice containing the name of a type.
+    #[rustc_const_unstable(feature = "const_type_name", issue = "none")]
     pub fn type_name<T: ?Sized>() -> &'static str;
 
     /// Gets an identifier which is globally unique to the specified type. This
     /// function will return the same value for a type regardless of whichever
     /// crate it is invoked in.
+    #[rustc_const_unstable(feature = "const_type_id", issue = "none")]
     pub fn type_id<T: ?Sized + 'static>() -> u64;
+
+    /// A guard for unsafe functions that cannot ever be executed if `T` is uninhabited:
+    /// This will statically either panic, or do nothing.
+    pub fn panic_if_uninhabited<T>();
+
+    /// Gets a reference to a static `Location` indicating where it was called.
+    #[rustc_const_unstable(feature = "const_caller_location", issue = "47809")]
+    pub fn caller_location() -> &'static crate::panic::Location<'static>;
 
     /// Creates a value initialized to zero.
     ///
     /// `init` is unsafe because it returns a zeroed-out datum,
-    /// which is unsafe unless T is `Copy`.  Also, even if T is
+    /// which is unsafe unless `T` is `Copy`. Also, even if T is
     /// `Copy`, an all-zero value may not correspond to any legitimate
     /// state for the type in question.
+    #[unstable(
+        feature = "core_intrinsics",
+        reason = "intrinsics are unlikely to ever be stabilized, instead \
+                         they should be used through stabilized interfaces \
+                         in the rest of the standard library",
+        issue = "none"
+    )]
+    #[rustc_deprecated(reason = "superseded by MaybeUninit, removal planned", since = "1.38.0")]
     pub fn init<T>() -> T;
 
     /// Creates an uninitialized value.
@@ -714,12 +748,23 @@ extern "rust-intrinsic" {
     /// state, which means it may claim either dropped or
     /// undropped. In the general case one must use `ptr::write` to
     /// initialize memory previous set to the result of `uninit`.
+    #[unstable(
+        feature = "core_intrinsics",
+        reason = "intrinsics are unlikely to ever be stabilized, instead \
+                         they should be used through stabilized interfaces \
+                         in the rest of the standard library",
+        issue = "none"
+    )]
+    #[rustc_deprecated(reason = "superseded by MaybeUninit, removal planned", since = "1.38.0")]
     pub fn uninit<T>() -> T;
+
+    /// Moves a value out of scope without running drop glue.
+    pub fn forget<T: ?Sized>(_: T);
 
     /// Reinterprets the bits of a value of one type as another type.
     ///
     /// Both types must have the same size. Neither the original, nor the result,
-    /// may be an [invalid value](../../nomicon/meet-safe-and-unsafe.html).
+    /// may be an [invalid value](../../nomicon/what-unsafe-does.html).
     ///
     /// `transmute` is semantically equivalent to a bitwise move of one type
     /// into another. It copies the bits from the source value into the
@@ -738,16 +783,6 @@ extern "rust-intrinsic" {
     /// # Examples
     ///
     /// There are a few things that `transmute` is really useful for.
-    ///
-    /// Getting the bitpattern of a floating point type (or, more generally,
-    /// type punning, when `T` and `U` aren't pointers):
-    ///
-    /// ```
-    /// let bitpattern = unsafe {
-    ///     std::mem::transmute::<f32, u32>(1.0)
-    /// };
-    /// assert_eq!(bitpattern, 0x3F800000);
-    /// ```
     ///
     /// Turning a pointer into a function pointer. This is *not* portable to
     /// machines where function pointers and data pointers have different sizes.
@@ -841,35 +876,42 @@ extern "rust-intrinsic" {
     ///
     /// ```
     /// let store = [0, 1, 2, 3];
-    /// let mut v_orig = store.iter().collect::<Vec<&i32>>();
+    /// let v_orig = store.iter().collect::<Vec<&i32>>();
+    ///
+    /// // clone the vector as we will reuse them later
+    /// let v_clone = v_orig.clone();
     ///
     /// // Using transmute: this is Undefined Behavior, and a bad idea.
     /// // However, it is no-copy.
     /// let v_transmuted = unsafe {
-    ///     std::mem::transmute::<Vec<&i32>, Vec<Option<&i32>>>(
-    ///         v_orig.clone())
+    ///     std::mem::transmute::<Vec<&i32>, Vec<Option<&i32>>>(v_clone)
     /// };
+    ///
+    /// let v_clone = v_orig.clone();
     ///
     /// // This is the suggested, safe way.
     /// // It does copy the entire vector, though, into a new array.
-    /// let v_collected = v_orig.clone()
-    ///                         .into_iter()
-    ///                         .map(|r| Some(r))
-    ///                         .collect::<Vec<Option<&i32>>>();
+    /// let v_collected = v_clone.into_iter()
+    ///                          .map(Some)
+    ///                          .collect::<Vec<Option<&i32>>>();
+    ///
+    /// let v_clone = v_orig.clone();
     ///
     /// // The no-copy, unsafe way, still using transmute, but not UB.
     /// // This is equivalent to the original, but safer, and reuses the
-    /// // same Vec internals. Therefore the new inner type must have the
-    /// // exact same size, and the same or lesser alignment, as the old
-    /// // type. The same caveats exist for this method as transmute, for
+    /// // same `Vec` internals. Therefore, the new inner type must have the
+    /// // exact same size, and the same alignment, as the old type.
+    /// // The same caveats exist for this method as transmute, for
     /// // the original inner type (`&i32`) to the converted inner type
     /// // (`Option<&i32>`), so read the nomicon pages linked above.
     /// let v_from_raw = unsafe {
-    ///     Vec::from_raw_parts(v_orig.as_mut_ptr(),
-    ///                         v_orig.len(),
-    ///                         v_orig.capacity())
+    // FIXME Update this when vec_into_raw_parts is stabilized
+    ///     // Ensure the original vector is not dropped.
+    ///     let mut v_clone = std::mem::ManuallyDrop::new(v_clone);
+    ///     Vec::from_raw_parts(v_clone.as_mut_ptr() as *mut Option<&i32>,
+    ///                         v_clone.len(),
+    ///                         v_clone.capacity())
     /// };
-    /// std::mem::forget(v_orig);
     /// ```
     ///
     /// Implementing `split_at_mut`:
@@ -877,8 +919,8 @@ extern "rust-intrinsic" {
     /// ```
     /// use std::{slice, mem};
     ///
-    /// // There are multiple ways to do this; and there are multiple problems
-    /// // with the following, transmute, way.
+    /// // There are multiple ways to do this, and there are multiple problems
+    /// // with the following (transmute) way.
     /// fn split_at_mut_transmute<T>(slice: &mut [T], mid: usize)
     ///                              -> (&mut [T], &mut [T]) {
     ///     let len = slice.len();
@@ -920,11 +962,12 @@ extern "rust-intrinsic" {
     ///         // treat it as "dead", and therefore, you only have two real
     ///         // mutable slices.
     ///         (slice::from_raw_parts_mut(ptr, mid),
-    ///          slice::from_raw_parts_mut(ptr.offset(mid as isize), len - mid))
+    ///          slice::from_raw_parts_mut(ptr.add(mid), len - mid))
     ///     }
     /// }
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
+    #[rustc_const_unstable(feature = "const_transmute", issue = "53605")]
     pub fn transmute<T, U>(e: T) -> U;
 
     /// Returns `true` if the actual type given as `T` requires drop
@@ -933,6 +976,10 @@ extern "rust-intrinsic" {
     ///
     /// If the actual type neither requires drop glue nor implements
     /// `Copy`, then may return `true` or `false`.
+    ///
+    /// The stabilized version of this intrinsic is
+    /// [`std::mem::needs_drop`](../../std/mem/fn.needs_drop.html).
+    #[rustc_const_stable(feature = "const_needs_drop", since = "1.40.0")]
     pub fn needs_drop<T>() -> bool;
 
     /// Calculates the offset from a pointer.
@@ -961,125 +1008,43 @@ extern "rust-intrinsic" {
     /// value is not necessarily valid to be used to actually access memory.
     pub fn arith_offset<T>(dst: *const T, offset: isize) -> *const T;
 
-    /// Copies `count * size_of<T>` bytes from `src` to `dst`. The source
-    /// and destination may *not* overlap.
-    ///
-    /// `copy_nonoverlapping` is semantically equivalent to C's `memcpy`.
-    ///
-    /// # Safety
-    ///
-    /// Beyond requiring that the program must be allowed to access both regions
-    /// of memory, it is Undefined Behavior for source and destination to
-    /// overlap. Care must also be taken with the ownership of `src` and
-    /// `dst`. This method semantically moves the values of `src` into `dst`.
-    /// However it does not drop the contents of `dst`, or prevent the contents
-    /// of `src` from being dropped or used.
-    ///
-    /// # Examples
-    ///
-    /// A safe swap function:
-    ///
-    /// ```
-    /// use std::mem;
-    /// use std::ptr;
-    ///
-    /// # #[allow(dead_code)]
-    /// fn swap<T>(x: &mut T, y: &mut T) {
-    ///     unsafe {
-    ///         // Give ourselves some scratch space to work with
-    ///         let mut t: T = mem::uninitialized();
-    ///
-    ///         // Perform the swap, `&mut` pointers never alias
-    ///         ptr::copy_nonoverlapping(x, &mut t, 1);
-    ///         ptr::copy_nonoverlapping(y, x, 1);
-    ///         ptr::copy_nonoverlapping(&t, y, 1);
-    ///
-    ///         // y and t now point to the same thing, but we need to completely forget `tmp`
-    ///         // because it's no longer relevant.
-    ///         mem::forget(t);
-    ///     }
-    /// }
-    /// ```
-    #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize);
-
-    /// Copies `count * size_of<T>` bytes from `src` to `dst`. The source
-    /// and destination may overlap.
-    ///
-    /// `copy` is semantically equivalent to C's `memmove`.
-    ///
-    /// # Safety
-    ///
-    /// Care must be taken with the ownership of `src` and `dst`.
-    /// This method semantically moves the values of `src` into `dst`.
-    /// However it does not drop the contents of `dst`, or prevent the contents of `src`
-    /// from being dropped or used.
-    ///
-    /// # Examples
-    ///
-    /// Efficiently create a Rust vector from an unsafe buffer:
-    ///
-    /// ```
-    /// use std::ptr;
-    ///
-    /// # #[allow(dead_code)]
-    /// unsafe fn from_buf_raw<T>(ptr: *const T, elts: usize) -> Vec<T> {
-    ///     let mut dst = Vec::with_capacity(elts);
-    ///     dst.set_len(elts);
-    ///     ptr::copy(ptr, dst.as_mut_ptr(), elts);
-    ///     dst
-    /// }
-    /// ```
-    ///
-    #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn copy<T>(src: *const T, dst: *mut T, count: usize);
-
-    /// Invokes memset on the specified pointer, setting `count * size_of::<T>()`
-    /// bytes of memory starting at `dst` to `val`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::ptr;
-    ///
-    /// let mut vec = vec![0; 4];
-    /// unsafe {
-    ///     let vec_ptr = vec.as_mut_ptr();
-    ///     ptr::write_bytes(vec_ptr, b'a', 2);
-    /// }
-    /// assert_eq!(vec, [b'a', b'a', 0, 0]);
-    /// ```
-    #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn write_bytes<T>(dst: *mut T, val: u8, count: usize);
-
     /// Equivalent to the appropriate `llvm.memcpy.p0i8.0i8.*` intrinsic, with
     /// a size of `count` * `size_of::<T>()` and an alignment of
     /// `min_align_of::<T>()`
     ///
-    /// The volatile parameter is set to `true`, so it will not be optimized out.
-    pub fn volatile_copy_nonoverlapping_memory<T>(dst: *mut T, src: *const T,
-                                                  count: usize);
+    /// The volatile parameter is set to `true`, so it will not be optimized out
+    /// unless size is equal to zero.
+    pub fn volatile_copy_nonoverlapping_memory<T>(dst: *mut T, src: *const T, count: usize);
     /// Equivalent to the appropriate `llvm.memmove.p0i8.0i8.*` intrinsic, with
     /// a size of `count` * `size_of::<T>()` and an alignment of
     /// `min_align_of::<T>()`
     ///
-    /// The volatile parameter is set to `true`, so it will not be optimized out.
+    /// The volatile parameter is set to `true`, so it will not be optimized out
+    /// unless size is equal to zero.
     pub fn volatile_copy_memory<T>(dst: *mut T, src: *const T, count: usize);
     /// Equivalent to the appropriate `llvm.memset.p0i8.*` intrinsic, with a
     /// size of `count` * `size_of::<T>()` and an alignment of
     /// `min_align_of::<T>()`.
     ///
-    /// The volatile parameter is set to `true`, so it will not be optimized out.
+    /// The volatile parameter is set to `true`, so it will not be optimized out
+    /// unless size is equal to zero.
     pub fn volatile_set_memory<T>(dst: *mut T, val: u8, count: usize);
 
-    /// Perform a volatile load from the `src` pointer.
+    /// Performs a volatile load from the `src` pointer.
     /// The stabilized version of this intrinsic is
     /// [`std::ptr::read_volatile`](../../std/ptr/fn.read_volatile.html).
     pub fn volatile_load<T>(src: *const T) -> T;
-    /// Perform a volatile store to the `dst` pointer.
+    /// Performs a volatile store to the `dst` pointer.
     /// The stabilized version of this intrinsic is
     /// [`std::ptr::write_volatile`](../../std/ptr/fn.write_volatile.html).
     pub fn volatile_store<T>(dst: *mut T, val: T);
+
+    /// Performs a volatile load from the `src` pointer
+    /// The pointer is not required to be aligned.
+    pub fn unaligned_volatile_load<T>(src: *const T) -> T;
+    /// Performs a volatile store to the `dst` pointer.
+    /// The pointer is not required to be aligned.
+    pub fn unaligned_volatile_store<T>(dst: *mut T, val: T);
 
     /// Returns the square root of an `f32`
     pub fn sqrtf32(x: f32) -> f32;
@@ -1141,6 +1106,15 @@ extern "rust-intrinsic" {
     /// Returns the absolute value of an `f64`.
     pub fn fabsf64(x: f64) -> f64;
 
+    /// Returns the minimum of two `f32` values.
+    pub fn minnumf32(x: f32, y: f32) -> f32;
+    /// Returns the minimum of two `f64` values.
+    pub fn minnumf64(x: f64, y: f64) -> f64;
+    /// Returns the maximum of two `f32` values.
+    pub fn maxnumf32(x: f32, y: f32) -> f32;
+    /// Returns the maximum of two `f64` values.
+    pub fn maxnumf64(x: f64, y: f64) -> f64;
+
     /// Copies the sign from `y` to `x` for `f32` values.
     pub fn copysignf32(x: f32, y: f32) -> f32;
     /// Copies the sign from `y` to `x` for `f64` values.
@@ -1198,8 +1172,12 @@ extern "rust-intrinsic" {
     /// May assume inputs are finite.
     pub fn frem_fast<T>(a: T, b: T) -> T;
 
+    /// Convert with LLVM’s fptoui/fptosi, which may return undef for values out of range
+    /// https://github.com/rust-lang/rust/issues/10184
+    pub fn float_to_int_approx_unchecked<Float, Int>(value: Float) -> Int;
 
     /// Returns the number of bits set in an integer type `T`
+    #[rustc_const_stable(feature = "const_ctpop", since = "1.40.0")]
     pub fn ctpop<T>(x: T) -> T;
 
     /// Returns the number of leading unset bits (zeroes) in an integer type `T`.
@@ -1212,7 +1190,7 @@ extern "rust-intrinsic" {
     /// use std::intrinsics::ctlz;
     ///
     /// let x = 0b0001_1100_u8;
-    /// let num_leading = unsafe { ctlz(x) };
+    /// let num_leading = ctlz(x);
     /// assert_eq!(num_leading, 3);
     /// ```
     ///
@@ -1224,9 +1202,10 @@ extern "rust-intrinsic" {
     /// use std::intrinsics::ctlz;
     ///
     /// let x = 0u16;
-    /// let num_leading = unsafe { ctlz(x) };
+    /// let num_leading = ctlz(x);
     /// assert_eq!(num_leading, 16);
     /// ```
+    #[rustc_const_stable(feature = "const_ctlz", since = "1.40.0")]
     pub fn ctlz<T>(x: T) -> T;
 
     /// Like `ctlz`, but extra-unsafe as it returns `undef` when
@@ -1243,7 +1222,7 @@ extern "rust-intrinsic" {
     /// let num_leading = unsafe { ctlz_nonzero(x) };
     /// assert_eq!(num_leading, 3);
     /// ```
-    #[cfg(not(stage0))]
+    #[rustc_const_unstable(feature = "constctlz", issue = "none")]
     pub fn ctlz_nonzero<T>(x: T) -> T;
 
     /// Returns the number of trailing unset bits (zeroes) in an integer type `T`.
@@ -1256,7 +1235,7 @@ extern "rust-intrinsic" {
     /// use std::intrinsics::cttz;
     ///
     /// let x = 0b0011_1000_u8;
-    /// let num_trailing = unsafe { cttz(x) };
+    /// let num_trailing = cttz(x);
     /// assert_eq!(num_trailing, 3);
     /// ```
     ///
@@ -1268,9 +1247,10 @@ extern "rust-intrinsic" {
     /// use std::intrinsics::cttz;
     ///
     /// let x = 0u16;
-    /// let num_trailing = unsafe { cttz(x) };
+    /// let num_trailing = cttz(x);
     /// assert_eq!(num_trailing, 16);
     /// ```
+    #[rustc_const_stable(feature = "const_cttz", since = "1.40.0")]
     pub fn cttz<T>(x: T) -> T;
 
     /// Like `cttz`, but extra-unsafe as it returns `undef` when
@@ -1287,29 +1267,41 @@ extern "rust-intrinsic" {
     /// let num_trailing = unsafe { cttz_nonzero(x) };
     /// assert_eq!(num_trailing, 3);
     /// ```
-    #[cfg(not(stage0))]
+    #[rustc_const_unstable(feature = "const_cttz", issue = "none")]
     pub fn cttz_nonzero<T>(x: T) -> T;
 
     /// Reverses the bytes in an integer type `T`.
+    #[rustc_const_stable(feature = "const_bswap", since = "1.40.0")]
     pub fn bswap<T>(x: T) -> T;
+
+    /// Reverses the bits in an integer type `T`.
+    #[rustc_const_stable(feature = "const_bitreverse", since = "1.40.0")]
+    pub fn bitreverse<T>(x: T) -> T;
 
     /// Performs checked integer addition.
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `overflowing_add` method. For example,
     /// [`std::u32::overflowing_add`](../../std/primitive.u32.html#method.overflowing_add)
+    #[rustc_const_stable(feature = "const_int_overflow", since = "1.40.0")]
     pub fn add_with_overflow<T>(x: T, y: T) -> (T, bool);
 
     /// Performs checked integer subtraction
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `overflowing_sub` method. For example,
     /// [`std::u32::overflowing_sub`](../../std/primitive.u32.html#method.overflowing_sub)
+    #[rustc_const_stable(feature = "const_int_overflow", since = "1.40.0")]
     pub fn sub_with_overflow<T>(x: T, y: T) -> (T, bool);
 
     /// Performs checked integer multiplication
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `overflowing_mul` method. For example,
     /// [`std::u32::overflowing_mul`](../../std/primitive.u32.html#method.overflowing_mul)
+    #[rustc_const_stable(feature = "const_int_overflow", since = "1.40.0")]
     pub fn mul_with_overflow<T>(x: T, y: T) -> (T, bool);
+
+    /// Performs an exact division, resulting in undefined behavior where
+    /// `x % y != 0` or `y == 0` or `x == T::min_value() && y == -1`
+    pub fn exact_div<T>(x: T, y: T) -> T;
 
     /// Performs an unchecked division, resulting in undefined behavior
     /// where y = 0 or x = `T::min_value()` and y = -1
@@ -1320,26 +1312,70 @@ extern "rust-intrinsic" {
 
     /// Performs an unchecked left shift, resulting in undefined behavior when
     /// y < 0 or y >= N, where N is the width of T in bits.
+    #[rustc_const_stable(feature = "const_int_unchecked", since = "1.40.0")]
     pub fn unchecked_shl<T>(x: T, y: T) -> T;
     /// Performs an unchecked right shift, resulting in undefined behavior when
     /// y < 0 or y >= N, where N is the width of T in bits.
+    #[rustc_const_stable(feature = "const_int_unchecked", since = "1.40.0")]
     pub fn unchecked_shr<T>(x: T, y: T) -> T;
+
+    /// Returns the result of an unchecked addition, resulting in
+    /// undefined behavior when `x + y > T::max_value()` or `x + y < T::min_value()`.
+    pub fn unchecked_add<T>(x: T, y: T) -> T;
+
+    /// Returns the result of an unchecked subtraction, resulting in
+    /// undefined behavior when `x - y > T::max_value()` or `x - y < T::min_value()`.
+    pub fn unchecked_sub<T>(x: T, y: T) -> T;
+
+    /// Returns the result of an unchecked multiplication, resulting in
+    /// undefined behavior when `x * y > T::max_value()` or `x * y < T::min_value()`.
+    pub fn unchecked_mul<T>(x: T, y: T) -> T;
+
+    /// Performs rotate left.
+    /// The stabilized versions of this intrinsic are available on the integer
+    /// primitives via the `rotate_left` method. For example,
+    /// [`std::u32::rotate_left`](../../std/primitive.u32.html#method.rotate_left)
+    #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
+    pub fn rotate_left<T>(x: T, y: T) -> T;
+
+    /// Performs rotate right.
+    /// The stabilized versions of this intrinsic are available on the integer
+    /// primitives via the `rotate_right` method. For example,
+    /// [`std::u32::rotate_right`](../../std/primitive.u32.html#method.rotate_right)
+    #[rustc_const_stable(feature = "const_int_rotate", since = "1.40.0")]
+    pub fn rotate_right<T>(x: T, y: T) -> T;
 
     /// Returns (a + b) mod 2<sup>N</sup>, where N is the width of T in bits.
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `wrapping_add` method. For example,
     /// [`std::u32::wrapping_add`](../../std/primitive.u32.html#method.wrapping_add)
-    pub fn overflowing_add<T>(a: T, b: T) -> T;
+    #[rustc_const_stable(feature = "const_int_wrapping", since = "1.40.0")]
+    pub fn wrapping_add<T>(a: T, b: T) -> T;
     /// Returns (a - b) mod 2<sup>N</sup>, where N is the width of T in bits.
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `wrapping_sub` method. For example,
     /// [`std::u32::wrapping_sub`](../../std/primitive.u32.html#method.wrapping_sub)
-    pub fn overflowing_sub<T>(a: T, b: T) -> T;
+    #[rustc_const_stable(feature = "const_int_wrapping", since = "1.40.0")]
+    pub fn wrapping_sub<T>(a: T, b: T) -> T;
     /// Returns (a * b) mod 2<sup>N</sup>, where N is the width of T in bits.
     /// The stabilized versions of this intrinsic are available on the integer
     /// primitives via the `wrapping_mul` method. For example,
     /// [`std::u32::wrapping_mul`](../../std/primitive.u32.html#method.wrapping_mul)
-    pub fn overflowing_mul<T>(a: T, b: T) -> T;
+    #[rustc_const_stable(feature = "const_int_wrapping", since = "1.40.0")]
+    pub fn wrapping_mul<T>(a: T, b: T) -> T;
+
+    /// Computes `a + b`, while saturating at numeric bounds.
+    /// The stabilized versions of this intrinsic are available on the integer
+    /// primitives via the `saturating_add` method. For example,
+    /// [`std::u32::saturating_add`](../../std/primitive.u32.html#method.saturating_add)
+    #[rustc_const_stable(feature = "const_int_saturating", since = "1.40.0")]
+    pub fn saturating_add<T>(a: T, b: T) -> T;
+    /// Computes `a - b`, while saturating at numeric bounds.
+    /// The stabilized versions of this intrinsic are available on the integer
+    /// primitives via the `saturating_sub` method. For example,
+    /// [`std::u32::saturating_sub`](../../std/primitive.u32.html#method.saturating_sub)
+    #[rustc_const_stable(feature = "const_int_saturating", since = "1.40.0")]
+    pub fn saturating_sub<T>(a: T, b: T) -> T;
 
     /// Returns the value of the discriminant for the variant in 'v',
     /// cast to a `u64`; if `T` has no discriminant, returns 0.
@@ -1353,5 +1389,282 @@ extern "rust-intrinsic" {
     /// platforms this is a `*mut *mut T` which is filled in by the compiler and
     /// on MSVC it's `*mut [usize; 2]`. For more information see the compiler's
     /// source as well as std's catch implementation.
-    pub fn try(f: fn(*mut u8), data: *mut u8, local_ptr: *mut u8) -> i32;
+    pub fn r#try(f: fn(*mut u8), data: *mut u8, local_ptr: *mut u8) -> i32;
+
+    /// Emits a `!nontemporal` store according to LLVM (see their docs).
+    /// Probably will never become stable.
+    pub fn nontemporal_store<T>(ptr: *mut T, val: T);
+
+    /// See documentation of `<*const T>::offset_from` for details.
+    #[rustc_const_unstable(feature = "const_ptr_offset_from", issue = "none")]
+    pub fn ptr_offset_from<T>(ptr: *const T, base: *const T) -> isize;
+
+    /// Internal hook used by Miri to implement unwinding.
+    /// Compiles to a NOP during non-Miri codegen.
+    ///
+    /// Perma-unstable: do not use
+    pub fn miri_start_panic(data: *mut (dyn crate::any::Any + crate::marker::Send)) -> ();
+}
+
+// Some functions are defined here because they accidentally got made
+// available in this module on stable. See <https://github.com/rust-lang/rust/issues/15702>.
+// (`transmute` also falls into this category, but it cannot be wrapped due to the
+// check that `T` and `U` have the same size.)
+
+/// Checks whether `ptr` is properly aligned with respect to
+/// `align_of::<T>()`.
+pub(crate) fn is_aligned_and_not_null<T>(ptr: *const T) -> bool {
+    !ptr.is_null() && ptr as usize % mem::align_of::<T>() == 0
+}
+
+/// Checks whether the regions of memory starting at `src` and `dst` of size
+/// `count * size_of::<T>()` overlap.
+fn overlaps<T>(src: *const T, dst: *const T, count: usize) -> bool {
+    let src_usize = src as usize;
+    let dst_usize = dst as usize;
+    let size = mem::size_of::<T>().checked_mul(count).unwrap();
+    let diff = if src_usize > dst_usize { src_usize - dst_usize } else { dst_usize - src_usize };
+    size > diff
+}
+
+/// Copies `count * size_of::<T>()` bytes from `src` to `dst`. The source
+/// and destination must *not* overlap.
+///
+/// For regions of memory which might overlap, use [`copy`] instead.
+///
+/// `copy_nonoverlapping` is semantically equivalent to C's [`memcpy`], but
+/// with the argument order swapped.
+///
+/// [`copy`]: ./fn.copy.html
+/// [`memcpy`]: https://en.cppreference.com/w/c/string/byte/memcpy
+///
+/// # Safety
+///
+/// Behavior is undefined if any of the following conditions are violated:
+///
+/// * `src` must be [valid] for reads of `count * size_of::<T>()` bytes.
+///
+/// * `dst` must be [valid] for writes of `count * size_of::<T>()` bytes.
+///
+/// * Both `src` and `dst` must be properly aligned.
+///
+/// * The region of memory beginning at `src` with a size of `count *
+///   size_of::<T>()` bytes must *not* overlap with the region of memory
+///   beginning at `dst` with the same size.
+///
+/// Like [`read`], `copy_nonoverlapping` creates a bitwise copy of `T`, regardless of
+/// whether `T` is [`Copy`]. If `T` is not [`Copy`], using *both* the values
+/// in the region beginning at `*src` and the region beginning at `*dst` can
+/// [violate memory safety][read-ownership].
+///
+/// Note that even if the effectively copied size (`count * size_of::<T>()`) is
+/// `0`, the pointers must be non-NULL and properly aligned.
+///
+/// [`Copy`]: ../marker/trait.Copy.html
+/// [`read`]: ../ptr/fn.read.html
+/// [read-ownership]: ../ptr/fn.read.html#ownership-of-the-returned-value
+/// [valid]: ../ptr/index.html#safety
+///
+/// # Examples
+///
+/// Manually implement [`Vec::append`]:
+///
+/// ```
+/// use std::ptr;
+///
+/// /// Moves all the elements of `src` into `dst`, leaving `src` empty.
+/// fn append<T>(dst: &mut Vec<T>, src: &mut Vec<T>) {
+///     let src_len = src.len();
+///     let dst_len = dst.len();
+///
+///     // Ensure that `dst` has enough capacity to hold all of `src`.
+///     dst.reserve(src_len);
+///
+///     unsafe {
+///         // The call to offset is always safe because `Vec` will never
+///         // allocate more than `isize::MAX` bytes.
+///         let dst_ptr = dst.as_mut_ptr().offset(dst_len as isize);
+///         let src_ptr = src.as_ptr();
+///
+///         // Truncate `src` without dropping its contents. We do this first,
+///         // to avoid problems in case something further down panics.
+///         src.set_len(0);
+///
+///         // The two regions cannot overlap because mutable references do
+///         // not alias, and two different vectors cannot own the same
+///         // memory.
+///         ptr::copy_nonoverlapping(src_ptr, dst_ptr, src_len);
+///
+///         // Notify `dst` that it now holds the contents of `src`.
+///         dst.set_len(dst_len + src_len);
+///     }
+/// }
+///
+/// let mut a = vec!['r'];
+/// let mut b = vec!['u', 's', 't'];
+///
+/// append(&mut a, &mut b);
+///
+/// assert_eq!(a, &['r', 'u', 's', 't']);
+/// assert!(b.is_empty());
+/// ```
+///
+/// [`Vec::append`]: ../../std/vec/struct.Vec.html#method.append
+#[stable(feature = "rust1", since = "1.0.0")]
+#[inline]
+pub unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize) {
+    extern "rust-intrinsic" {
+        fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize);
+    }
+
+    debug_assert!(is_aligned_and_not_null(src), "attempt to copy from unaligned or null pointer");
+    debug_assert!(is_aligned_and_not_null(dst), "attempt to copy to unaligned or null pointer");
+    debug_assert!(!overlaps(src, dst, count), "attempt to copy to overlapping memory");
+    copy_nonoverlapping(src, dst, count)
+}
+
+/// Copies `count * size_of::<T>()` bytes from `src` to `dst`. The source
+/// and destination may overlap.
+///
+/// If the source and destination will *never* overlap,
+/// [`copy_nonoverlapping`] can be used instead.
+///
+/// `copy` is semantically equivalent to C's [`memmove`], but with the argument
+/// order swapped. Copying takes place as if the bytes were copied from `src`
+/// to a temporary array and then copied from the array to `dst`.
+///
+/// [`copy_nonoverlapping`]: ./fn.copy_nonoverlapping.html
+/// [`memmove`]: https://en.cppreference.com/w/c/string/byte/memmove
+///
+/// # Safety
+///
+/// Behavior is undefined if any of the following conditions are violated:
+///
+/// * `src` must be [valid] for reads of `count * size_of::<T>()` bytes.
+///
+/// * `dst` must be [valid] for writes of `count * size_of::<T>()` bytes.
+///
+/// * Both `src` and `dst` must be properly aligned.
+///
+/// Like [`read`], `copy` creates a bitwise copy of `T`, regardless of
+/// whether `T` is [`Copy`]. If `T` is not [`Copy`], using both the values
+/// in the region beginning at `*src` and the region beginning at `*dst` can
+/// [violate memory safety][read-ownership].
+///
+/// Note that even if the effectively copied size (`count * size_of::<T>()`) is
+/// `0`, the pointers must be non-NULL and properly aligned.
+///
+/// [`Copy`]: ../marker/trait.Copy.html
+/// [`read`]: ../ptr/fn.read.html
+/// [read-ownership]: ../ptr/fn.read.html#ownership-of-the-returned-value
+/// [valid]: ../ptr/index.html#safety
+///
+/// # Examples
+///
+/// Efficiently create a Rust vector from an unsafe buffer:
+///
+/// ```
+/// use std::ptr;
+///
+/// # #[allow(dead_code)]
+/// unsafe fn from_buf_raw<T>(ptr: *const T, elts: usize) -> Vec<T> {
+///     let mut dst = Vec::with_capacity(elts);
+///     dst.set_len(elts);
+///     ptr::copy(ptr, dst.as_mut_ptr(), elts);
+///     dst
+/// }
+/// ```
+#[stable(feature = "rust1", since = "1.0.0")]
+#[inline]
+pub unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize) {
+    extern "rust-intrinsic" {
+        fn copy<T>(src: *const T, dst: *mut T, count: usize);
+    }
+
+    debug_assert!(is_aligned_and_not_null(src), "attempt to copy from unaligned or null pointer");
+    debug_assert!(is_aligned_and_not_null(dst), "attempt to copy to unaligned or null pointer");
+    copy(src, dst, count)
+}
+
+/// Sets `count * size_of::<T>()` bytes of memory starting at `dst` to
+/// `val`.
+///
+/// `write_bytes` is similar to C's [`memset`], but sets `count *
+/// size_of::<T>()` bytes to `val`.
+///
+/// [`memset`]: https://en.cppreference.com/w/c/string/byte/memset
+///
+/// # Safety
+///
+/// Behavior is undefined if any of the following conditions are violated:
+///
+/// * `dst` must be [valid] for writes of `count * size_of::<T>()` bytes.
+///
+/// * `dst` must be properly aligned.
+///
+/// Additionally, the caller must ensure that writing `count *
+/// size_of::<T>()` bytes to the given region of memory results in a valid
+/// value of `T`. Using a region of memory typed as a `T` that contains an
+/// invalid value of `T` is undefined behavior.
+///
+/// Note that even if the effectively copied size (`count * size_of::<T>()`) is
+/// `0`, the pointer must be non-NULL and properly aligned.
+///
+/// [valid]: ../ptr/index.html#safety
+///
+/// # Examples
+///
+/// Basic usage:
+///
+/// ```
+/// use std::ptr;
+///
+/// let mut vec = vec![0u32; 4];
+/// unsafe {
+///     let vec_ptr = vec.as_mut_ptr();
+///     ptr::write_bytes(vec_ptr, 0xfe, 2);
+/// }
+/// assert_eq!(vec, [0xfefefefe, 0xfefefefe, 0, 0]);
+/// ```
+///
+/// Creating an invalid value:
+///
+/// ```
+/// use std::ptr;
+///
+/// let mut v = Box::new(0i32);
+///
+/// unsafe {
+///     // Leaks the previously held value by overwriting the `Box<T>` with
+///     // a null pointer.
+///     ptr::write_bytes(&mut v as *mut Box<i32>, 0, 1);
+/// }
+///
+/// // At this point, using or dropping `v` results in undefined behavior.
+/// // drop(v); // ERROR
+///
+/// // Even leaking `v` "uses" it, and hence is undefined behavior.
+/// // mem::forget(v); // ERROR
+///
+/// // In fact, `v` is invalid according to basic type layout invariants, so *any*
+/// // operation touching it is undefined behavior.
+/// // let v2 = v; // ERROR
+///
+/// unsafe {
+///     // Let us instead put in a valid value
+///     ptr::write(&mut v as *mut Box<i32>, Box::new(42i32));
+/// }
+///
+/// // Now the box is fine
+/// assert_eq!(*v, 42);
+/// ```
+#[stable(feature = "rust1", since = "1.0.0")]
+#[inline]
+pub unsafe fn write_bytes<T>(dst: *mut T, val: u8, count: usize) {
+    extern "rust-intrinsic" {
+        fn write_bytes<T>(dst: *mut T, val: u8, count: usize);
+    }
+
+    debug_assert!(is_aligned_and_not_null(dst), "attempt to write to unaligned or null pointer");
+    write_bytes(dst, val, count)
 }

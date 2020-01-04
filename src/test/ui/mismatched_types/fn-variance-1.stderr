@@ -1,18 +1,27 @@
-error[E0281]: type mismatch: `fn(&mut isize) {takes_mut}` implements the trait `for<'r> std::ops::FnOnce<(&'r mut isize,)>`, but the trait `std::ops::FnOnce<(&{integer},)>` is required
-  --> $DIR/fn-variance-1.rs:21:5
+error[E0631]: type mismatch in function arguments
+  --> $DIR/fn-variance-1.rs:11:15
    |
-21 |     apply(&3, takes_mut);
-   |     ^^^^^ types differ in mutability
-   |
-   = note: required by `apply`
+LL | fn takes_mut(x: &mut isize) { }
+   | --------------------------- found signature of `for<'r> fn(&'r mut isize) -> _`
+LL | 
+LL | fn apply<T, F>(t: T, f: F) where F: FnOnce(T) {
+   |    -----                            --------- required by this bound in `apply`
+...
+LL |     apply(&3, takes_mut);
+   |               ^^^^^^^^^ expected signature of `fn(&{integer}) -> _`
 
-error[E0281]: type mismatch: `fn(&isize) {takes_imm}` implements the trait `for<'r> std::ops::FnOnce<(&'r isize,)>`, but the trait `std::ops::FnOnce<(&mut {integer},)>` is required
-  --> $DIR/fn-variance-1.rs:27:5
+error[E0631]: type mismatch in function arguments
+  --> $DIR/fn-variance-1.rs:15:19
    |
-27 |     apply(&mut 3, takes_imm);
-   |     ^^^^^ types differ in mutability
-   |
-   = note: required by `apply`
+LL | fn takes_imm(x: &isize) { }
+   | ----------------------- found signature of `for<'r> fn(&'r isize) -> _`
+...
+LL | fn apply<T, F>(t: T, f: F) where F: FnOnce(T) {
+   |    -----                            --------- required by this bound in `apply`
+...
+LL |     apply(&mut 3, takes_imm);
+   |                   ^^^^^^^^^ expected signature of `fn(&mut {integer}) -> _`
 
-error: aborting due to previous error(s)
+error: aborting due to 2 previous errors
 
+For more information about this error, try `rustc --explain E0631`.

@@ -1,45 +1,32 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use rustc::hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
+use crate::namespace::Namespace;
 use rustc::hir;
+use rustc::hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
-use rustc::traits;
-use rustc::ty::{self, TyCtxt};
+use rustc::traits::{self, IntercrateMode};
+use rustc::ty::TyCtxt;
 
-pub fn crate_inherent_impls_overlap_check<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                                    crate_num: CrateNum) {
+use rustc_error_codes::*;
+
+pub fn crate_inherent_impls_overlap_check(tcx: TyCtxt<'_>, crate_num: CrateNum) {
     assert_eq!(crate_num, LOCAL_CRATE);
-    let krate = tcx.hir.krate();
+    let krate = tcx.hir().krate();
     krate.visit_all_item_likes(&mut InherentOverlapChecker { tcx });
 }
 
-struct InherentOverlapChecker<'a, 'tcx: 'a> {
-    tcx: TyCtxt<'a, 'tcx, 'tcx>
+struct InherentOverlapChecker<'tcx> {
+    tcx: TyCtxt<'tcx>,
 }
 
-impl<'a, 'tcx> InherentOverlapChecker<'a, 'tcx> {
-    fn check_for_common_items_in_impls(&self, impl1: DefId, impl2: DefId) {
-        #[derive(Copy, Clone, PartialEq)]
-        enum Namespace {
-            Type,
-            Value,
-        }
-
+impl InherentOverlapChecker<'tcx> {
+    fn check_for_common_items_in_impls(
+        &self,
+        impl1: DefId,
+        impl2: DefId,
+        overlap: traits::OverlapResult<'_>,
+    ) {
         let name_and_namespace = |def_id| {
             let item = self.tcx.associated_item(def_id);
-            (item.name, match item.kind {
-                ty::AssociatedKind::Type => Namespace::Type,
-                ty::AssociatedKind::Const |
-                ty::AssociatedKind::Method => Namespace::Value,
-            })
+            (item.ident.modern(), Namespace::from(item.kind))
         };
 
         let impl_items1 = self.tcx.associated_item_def_ids(impl1);
@@ -50,16 +37,31 @@ impl<'a, 'tcx> InherentOverlapChecker<'a, 'tcx> {
 
             for &item2 in &impl_items2[..] {
                 if (name, namespace) == name_and_namespace(item2) {
-                    struct_span_err!(self.tcx.sess,
-                                     self.tcx.span_of_impl(item1).unwrap(),
-                                     E0592,
-                                     "duplicate definitions with name `{}`",
-                                     name)
-                        .span_label(self.tcx.span_of_impl(item1).unwrap(),
-                                    format!("duplicate definitions for `{}`", name))
-                        .span_label(self.tcx.span_of_impl(item2).unwrap(),
-                                    format!("other definition for `{}`", name))
-                        .emit();
+                    let mut err = struct_span_err!(
+                        self.tcx.sess,
+                        self.tcx.span_of_impl(item1).unwrap(),
+                        E0592,
+                        "duplicate definitions with name `{}`",
+                        name
+                    );
+                    err.span_label(
+                        self.tcx.span_of_impl(item1).unwrap(),
+                        format!("duplicate definitions for `{}`", name),
+                    );
+                    err.span_label(
+                        self.tcx.span_of_impl(item2).unwrap(),
+                        format!("other definition for `{}`", name),
+                    );
+
+                    for cause in &overlap.intercrate_ambiguity_causes {
+                        cause.add_intercrate_ambiguity_hint(&mut err);
+                    }
+
+                    if overlap.involves_placeholder {
+                        traits::add_placeholder_note(&mut err);
+                    }
+
+                    err.emit();
                 }
             }
         }
@@ -70,34 +72,37 @@ impl<'a, 'tcx> InherentOverlapChecker<'a, 'tcx> {
 
         for (i, &impl1_def_id) in impls.iter().enumerate() {
             for &impl2_def_id in &impls[(i + 1)..] {
-                self.tcx.infer_ctxt().enter(|infcx| {
-                    if traits::overlapping_impls(&infcx, impl1_def_id, impl2_def_id).is_some() {
-                        self.check_for_common_items_in_impls(impl1_def_id, impl2_def_id)
-                    }
-                });
+                traits::overlapping_impls(
+                    self.tcx,
+                    impl1_def_id,
+                    impl2_def_id,
+                    IntercrateMode::Issue43355,
+                    |overlap| {
+                        self.check_for_common_items_in_impls(impl1_def_id, impl2_def_id, overlap);
+                        false
+                    },
+                    || true,
+                );
             }
         }
     }
 }
 
-impl<'a, 'tcx, 'v> ItemLikeVisitor<'v> for InherentOverlapChecker<'a, 'tcx> {
-    fn visit_item(&mut self, item: &'v hir::Item) {
-        match item.node {
-            hir::ItemEnum(..) |
-            hir::ItemStruct(..) |
-            hir::ItemTrait(..) |
-            hir::ItemUnion(..) => {
-                let type_def_id = self.tcx.hir.local_def_id(item.id);
+impl ItemLikeVisitor<'v> for InherentOverlapChecker<'tcx> {
+    fn visit_item(&mut self, item: &'v hir::Item<'v>) {
+        match item.kind {
+            hir::ItemKind::Enum(..)
+            | hir::ItemKind::Struct(..)
+            | hir::ItemKind::Trait(..)
+            | hir::ItemKind::Union(..) => {
+                let type_def_id = self.tcx.hir().local_def_id(item.hir_id);
                 self.check_for_overlapping_inherent_impls(type_def_id);
             }
             _ => {}
         }
     }
 
-    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem) {
-    }
+    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'v>) {}
 
-    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem) {
-    }
+    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'v>) {}
 }
-

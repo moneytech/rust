@@ -1,12 +1,5 @@
-# Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 r"""
 htmldocck.py is a custom checker script for Rustdoc HTML outputs.
@@ -15,65 +8,66 @@ htmldocck.py is a custom checker script for Rustdoc HTML outputs.
 
 The principle is simple: This script receives a path to generated HTML
 documentation and a "template" script, which has a series of check
-commands like `@has` or `@matches`. Each command can be used to check if
+commands like `@has` or `@matches`. Each command is used to check if
 some pattern is present or not present in the particular file or in
-the particular node of HTML tree. In many cases, the template script
-happens to be a source code given to rustdoc.
+a particular node of the HTML tree. In many cases, the template script
+happens to be the source code given to rustdoc.
 
 While it indeed is possible to test in smaller portions, it has been
 hard to construct tests in this fashion and major rendering errors were
-discovered much later. This script is designed for making the black-box
-and regression testing of Rustdoc easy. This does not preclude the needs
-for unit testing, but can be used to complement related tests by quickly
+discovered much later. This script is designed to make black-box and
+regression testing of Rustdoc easy. This does not preclude the needs for
+unit testing, but can be used to complement related tests by quickly
 showing the expected renderings.
 
 In order to avoid one-off dependencies for this task, this script uses
 a reasonably working HTML parser and the existing XPath implementation
-from Python 2's standard library. Hopefully we won't render
+from Python's standard library. Hopefully, we won't render
 non-well-formed HTML.
 
 # Commands
 
 Commands start with an `@` followed by a command name (letters and
 hyphens), and zero or more arguments separated by one or more whitespace
-and optionally delimited with single or double quotes. The `@` mark
-cannot be preceded by a non-whitespace character. Other lines (including
-every text up to the first `@`) are ignored, but it is recommended to
-avoid the use of `@` in the template file.
+characters and optionally delimited with single or double quotes. The `@`
+mark cannot be preceded by a non-whitespace character. Other lines
+(including every text up to the first `@`) are ignored, but it is
+recommended to avoid the use of `@` in the template file.
 
 There are a number of supported commands:
 
-* `@has PATH` checks for the existence of given file.
+* `@has PATH` checks for the existence of the given file.
 
   `PATH` is relative to the output directory. It can be given as `-`
   which repeats the most recently used `PATH`.
 
 * `@has PATH PATTERN` and `@matches PATH PATTERN` checks for
-  the occurrence of given `PATTERN` in the given file. Only one
-  occurrence of given pattern is enough.
+  the occurrence of the given pattern `PATTERN` in the specified file.
+  Only one occurrence of the pattern is enough.
 
   For `@has`, `PATTERN` is a whitespace-normalized (every consecutive
   whitespace being replaced by one single space character) string.
   The entire file is also whitespace-normalized including newlines.
 
   For `@matches`, `PATTERN` is a Python-supported regular expression.
-  The file remains intact but the regexp is matched with no `MULTILINE`
-  and `IGNORECASE` option. You can still use a prefix `(?m)` or `(?i)`
+  The file remains intact but the regexp is matched without the `MULTILINE`
+  and `IGNORECASE` options. You can still use a prefix `(?m)` or `(?i)`
   to override them, and `\A` and `\Z` for definitely matching
   the beginning and end of the file.
 
   (The same distinction goes to other variants of these commands.)
 
 * `@has PATH XPATH PATTERN` and `@matches PATH XPATH PATTERN` checks for
-  the presence of given `XPATH` in the given HTML file, and also
-  the occurrence of given `PATTERN` in the matching node or attribute.
-  Only one occurrence of given pattern in the match is enough.
+  the presence of the given XPath `XPATH` in the specified HTML file,
+  and also the occurrence of the given pattern `PATTERN` in the matching
+  node or attribute. Only one occurrence of the pattern in the match
+  is enough.
 
   `PATH` should be a valid and well-formed HTML file. It does *not*
   accept arbitrary HTML5; it should have matching open and close tags
   and correct entity references at least.
 
-  `XPATH` is an XPath expression to match. This is fairly limited:
+  `XPATH` is an XPath expression to match. The XPath is fairly limited:
   `tag`, `*`, `.`, `//`, `..`, `[@attr]`, `[@attr='value']`, `[tag]`,
   `[POS]` (element located in given `POS`), `[last()-POS]`, `text()`
   and `@attr` (both as the last segment) are supported. Some examples:
@@ -85,7 +79,7 @@ There are a number of supported commands:
   - `//h1[@class="fqn"]/span[1]/a[last()]/@class` matches a value of
     `class` attribute in the last `a` element (can be followed by more
     elements that are not `a`) inside the first `span` in the `h1` with
-    a class of `fqn`. Note that there cannot be no additional elements
+    a class of `fqn`. Note that there cannot be any additional elements
     between them due to the use of `/` instead of `//`.
 
   Do not try to use non-absolute paths, it won't work due to the flawed
@@ -93,36 +87,49 @@ There are a number of supported commands:
 
   For the text matches (i.e. paths not ending with `@attr`), any
   subelements are flattened into one string; this is handy for ignoring
-  highlights for example. If you want to simply check the presence of
-  given node or attribute, use an empty string (`""`) as a `PATTERN`.
+  highlights for example. If you want to simply check for the presence of
+  a given node or attribute, use an empty string (`""`) as a `PATTERN`.
 
-* `@count PATH XPATH COUNT' checks for the occurrence of given XPath
-  in the given file. The number of occurrences must match the given count.
+* `@count PATH XPATH COUNT' checks for the occurrence of the given XPath
+  in the specified file. The number of occurrences must match the given
+  count.
+
+* `@has-dir PATH` checks for the existence of the given directory.
 
 All conditions can be negated with `!`. `@!has foo/type.NoSuch.html`
 checks if the given file does not exist, for example.
 
 """
 
-from __future__ import print_function
+from __future__ import absolute_import, print_function, unicode_literals
+
+import codecs
+import io
 import sys
 import os.path
 import re
 import shlex
 from collections import namedtuple
-from HTMLParser import HTMLParser
+try:
+    from html.parser import HTMLParser
+except ImportError:
+    from HTMLParser import HTMLParser
 from xml.etree import cElementTree as ET
 
-# &larrb;/&rarrb; are not in HTML 4 but are in HTML 5
-from htmlentitydefs import entitydefs
-entitydefs['larrb'] = u'\u21e4'
-entitydefs['rarrb'] = u'\u21e5'
-entitydefs['nbsp'] = ' '
+try:
+    from html.entities import name2codepoint
+except ImportError:
+    from htmlentitydefs import name2codepoint
 
 # "void elements" (no closing tag) from the HTML Standard section 12.1.2
 VOID_ELEMENTS = set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'keygen',
                      'link', 'menuitem', 'meta', 'param', 'source', 'track', 'wbr'])
 
+# Python 2 -> 3 compatibility
+try:
+    unichr
+except NameError:
+    unichr = chr
 
 class CustomHTMLParser(HTMLParser):
     """simplified HTML parser.
@@ -152,11 +159,11 @@ class CustomHTMLParser(HTMLParser):
         self.__builder.data(data)
 
     def handle_entityref(self, name):
-        self.__builder.data(entitydefs[name])
+        self.__builder.data(unichr(name2codepoint[name]))
 
     def handle_charref(self, name):
         code = int(name[1:], 16) if name.startswith(('x', 'X')) else int(name, 10)
-        self.__builder.data(unichr(code).encode('utf-8'))
+        self.__builder.data(unichr(code))
 
     def close(self):
         HTMLParser.close(self)
@@ -184,12 +191,8 @@ def concat_multi_lines(f):
 
         # strip the common prefix from the current line if needed
         if lastline is not None:
-            maxprefix = 0
-            for i in xrange(min(len(line), len(lastline))):
-                if line[i] != lastline[i]:
-                    break
-                maxprefix += 1
-            line = line[maxprefix:].lstrip()
+            common_prefix = os.path.commonprefix([line, lastline])
+            line = line[len(common_prefix):].lstrip()
 
         firstlineno = firstlineno or lineno
         if line.endswith('\\'):
@@ -209,11 +212,11 @@ LINE_PATTERN = re.compile(r'''
     (?<=(?<!\S)@)(?P<negated>!?)
     (?P<cmd>[A-Za-z]+(?:-[A-Za-z]+)*)
     (?P<args>.*)$
-''', re.X)
+''', re.X | re.UNICODE)
 
 
 def get_commands(template):
-    with open(template, 'rUb') as f:
+    with io.open(template, encoding='utf-8') as f:
         for lineno, line in concat_multi_lines(f):
             m = LINE_PATTERN.search(line)
             if not m:
@@ -225,7 +228,10 @@ def get_commands(template):
             if args and not args[:1].isspace():
                 print_err(lineno, line, 'Invalid template syntax')
                 continue
-            args = shlex.split(args)
+            try:
+                args = shlex.split(args)
+            except UnicodeEncodeError:
+                args = [arg.decode('utf-8') for arg in shlex.split(args.encode('utf-8'))]
             yield Command(negated=negated, cmd=cmd, args=args, lineno=lineno+1, context=line)
 
 
@@ -279,7 +285,7 @@ class CachedFiles(object):
         if not(os.path.exists(abspath) and os.path.isfile(abspath)):
             raise FailedCheck('File does not exist {!r}'.format(path))
 
-        with open(abspath) as f:
+        with io.open(abspath, encoding='utf-8') as f:
             data = f.read()
             self.files[path] = data
             return data
@@ -293,20 +299,26 @@ class CachedFiles(object):
         if not(os.path.exists(abspath) and os.path.isfile(abspath)):
             raise FailedCheck('File does not exist {!r}'.format(path))
 
-        with open(abspath) as f:
+        with io.open(abspath, encoding='utf-8') as f:
             try:
-                tree = ET.parse(f, CustomHTMLParser())
+                tree = ET.fromstringlist(f.readlines(), CustomHTMLParser())
             except Exception as e:
                 raise RuntimeError('Cannot parse an HTML file {!r}: {}'.format(path, e))
             self.trees[path] = tree
             return self.trees[path]
+
+    def get_dir(self, path):
+        path = self.resolve_path(path)
+        abspath = os.path.join(self.root, path)
+        if not(os.path.exists(abspath) and os.path.isdir(abspath)):
+            raise FailedCheck('Directory does not exist {!r}'.format(path))
 
 
 def check_string(data, pat, regexp):
     if not pat:
         return True # special case a presence testing
     elif regexp:
-        return re.search(pat, data) is not None
+        return re.search(pat, data, flags=re.UNICODE) is not None
     else:
         data = ' '.join(data.split())
         pat = ' '.join(pat.split())
@@ -331,15 +343,19 @@ def check_tree_attr(tree, path, attr, pat, regexp):
 def check_tree_text(tree, path, pat, regexp):
     path = normalize_xpath(path)
     ret = False
-    for e in tree.findall(path):
-        try:
-            value = flatten(e)
-        except KeyError:
-            continue
-        else:
-            ret = check_string(value, pat, regexp)
-            if ret:
-                break
+    try:
+        for e in tree.findall(path):
+            try:
+                value = flatten(e)
+            except KeyError:
+                continue
+            else:
+                ret = check_string(value, pat, regexp)
+                if ret:
+                    break
+    except Exception as e:
+        print('Failed to get path "{}"'.format(path))
+        raise
     return ret
 
 
@@ -348,7 +364,12 @@ def get_tree_count(tree, path):
     return len(tree.findall(path))
 
 def stderr(*args):
-    print(*args, file=sys.stderr)
+    if sys.version_info.major < 3:
+        file = codecs.getwriter('utf-8')(sys.stderr)
+    else:
+        file = sys.stderr
+
+    print(*args, file=file)
 
 def print_err(lineno, context, err, message=None):
     global ERR_COUNT
@@ -372,7 +393,7 @@ def check_command(c, cache):
                     cache.get_file(c.args[0])
                     ret = True
                 except FailedCheck as err:
-                    cerr = err.message
+                    cerr = str(err)
                     ret = False
             elif len(c.args) == 2: # @has/matches <path> <pat> = string test
                 cerr = "`PATTERN` did not match"
@@ -400,6 +421,16 @@ def check_command(c, cache):
                 ret = expected == found
             else:
                 raise InvalidCheck('Invalid number of @{} arguments'.format(c.cmd))
+        elif c.cmd == 'has-dir': # has-dir test
+            if len(c.args) == 1: # @has-dir <path> = has-dir test
+                try:
+                    cache.get_dir(c.args[0])
+                    ret = True
+                except FailedCheck as err:
+                    cerr = str(err)
+                    ret = False
+            else:
+                raise InvalidCheck('Invalid number of @{} arguments'.format(c.cmd))
         elif c.cmd == 'valid-html':
             raise InvalidCheck('Unimplemented @valid-html')
 
@@ -413,9 +444,9 @@ def check_command(c, cache):
 
     except FailedCheck as err:
         message = '@{}{} check failed'.format('!' if c.negated else '', c.cmd)
-        print_err(c.lineno, c.context, err.message, message)
+        print_err(c.lineno, c.context, str(err), message)
     except InvalidCheck as err:
-        print_err(c.lineno, c.context, err.message)
+        print_err(c.lineno, c.context, str(err))
 
 def check(target, commands):
     cache = CachedFiles(target)

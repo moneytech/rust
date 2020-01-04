@@ -1,15 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// ignore-tidy-linelength
-
 macro_rules! enum_from_u32 {
     ($(#[$attr:meta])* pub enum $name:ident {
         $($variant:ident = $e:expr,)*
@@ -51,90 +39,215 @@ macro_rules! enum_from_u32 {
 macro_rules! bug {
     () => ( bug!("impossible case reached") );
     ($($message:tt)*) => ({
-        $crate::session::bug_fmt(file!(), line!(), format_args!($($message)*))
+        $crate::util::bug::bug_fmt(file!(), line!(), format_args!($($message)*))
     })
 }
 
 #[macro_export]
 macro_rules! span_bug {
     ($span:expr, $($message:tt)*) => ({
-        $crate::session::span_bug_fmt(file!(), line!(), $span, format_args!($($message)*))
+        $crate::util::bug::span_bug_fmt(file!(), line!(), $span, format_args!($($message)*))
     })
 }
 
-#[macro_export]
-macro_rules! __impl_stable_hash_field {
-    (DECL IGNORED) => (_);
-    (DECL $name:ident) => (ref $name);
-    (USE IGNORED $ctx:expr, $hasher:expr) => ({});
-    (USE $name:ident, $ctx:expr, $hasher:expr) => ($name.hash_stable($ctx, $hasher));
-}
+///////////////////////////////////////////////////////////////////////////
+// Lift and TypeFoldable macros
+//
+// When possible, use one of these (relatively) convenient macros to write
+// the impls for you.
 
 #[macro_export]
-macro_rules! impl_stable_hash_for {
-    (enum $enum_name:path { $( $variant:ident $( ( $($arg:ident),* ) )* ),* }) => {
-        impl<'a, 'gcx, 'tcx> ::rustc_data_structures::stable_hasher::HashStable<$crate::ich::StableHashingContext<'a, 'gcx, 'tcx>> for $enum_name {
-            #[inline]
-            fn hash_stable<W: ::rustc_data_structures::stable_hasher::StableHasherResult>(&self,
-                                                  __ctx: &mut $crate::ich::StableHashingContext<'a, 'gcx, 'tcx>,
-                                                  __hasher: &mut ::rustc_data_structures::stable_hasher::StableHasher<W>) {
-                use $enum_name::*;
-                ::std::mem::discriminant(self).hash_stable(__ctx, __hasher);
-
-                match *self {
-                    $(
-                        $variant $( ( $( __impl_stable_hash_field!(DECL $arg) ),* ) )* => {
-                            $($( __impl_stable_hash_field!(USE $arg, __ctx, __hasher) );*)*
-                        }
-                    )*
+macro_rules! CloneLiftImpls {
+    (for <$tcx:lifetime> { $($ty:ty,)+ }) => {
+        $(
+            impl<$tcx> $crate::ty::Lift<$tcx> for $ty {
+                type Lifted = Self;
+                fn lift_to_tcx(&self, _: $crate::ty::TyCtxt<$tcx>) -> Option<Self> {
+                    Some(Clone::clone(self))
                 }
             }
-        }
+        )+
     };
-    (struct $struct_name:path { $($field:ident),* }) => {
-        impl<'a, 'gcx, 'tcx> ::rustc_data_structures::stable_hasher::HashStable<$crate::ich::StableHashingContext<'a, 'gcx, 'tcx>> for $struct_name {
-            #[inline]
-            fn hash_stable<W: ::rustc_data_structures::stable_hasher::StableHasherResult>(&self,
-                                                  __ctx: &mut $crate::ich::StableHashingContext<'a, 'gcx, 'tcx>,
-                                                  __hasher: &mut ::rustc_data_structures::stable_hasher::StableHasher<W>) {
-                let $struct_name {
-                    $(ref $field),*
-                } = *self;
 
-                $( $field.hash_stable(__ctx, __hasher));*
+    ($($ty:ty,)+) => {
+        CloneLiftImpls! {
+            for <'tcx> {
+                $($ty,)+
             }
         }
     };
-    (tuple_struct $struct_name:path { $($field:ident),* }) => {
-        impl<'a, 'gcx, 'tcx> ::rustc_data_structures::stable_hasher::HashStable<$crate::ich::StableHashingContext<'a, 'gcx, 'tcx>> for $struct_name {
-            #[inline]
-            fn hash_stable<W: ::rustc_data_structures::stable_hasher::StableHasherResult>(&self,
-                                                  __ctx: &mut $crate::ich::StableHashingContext<'a, 'gcx, 'tcx>,
-                                                  __hasher: &mut ::rustc_data_structures::stable_hasher::StableHasher<W>) {
-                let $struct_name (
-                    $(ref $field),*
-                ) = *self;
+}
 
-                $( $field.hash_stable(__ctx, __hasher));*
+/// Used for types that are `Copy` and which **do not care arena
+/// allocated data** (i.e., don't need to be folded).
+#[macro_export]
+macro_rules! CloneTypeFoldableImpls {
+    (for <$tcx:lifetime> { $($ty:ty,)+ }) => {
+        $(
+            impl<$tcx> $crate::ty::fold::TypeFoldable<$tcx> for $ty {
+                fn super_fold_with<F: $crate::ty::fold::TypeFolder<$tcx>>(
+                    &self,
+                    _: &mut F
+                ) -> $ty {
+                    Clone::clone(self)
+                }
+
+                fn super_visit_with<F: $crate::ty::fold::TypeVisitor<$tcx>>(
+                    &self,
+                    _: &mut F)
+                    -> bool
+                {
+                    false
+                }
+            }
+        )+
+    };
+
+    ($($ty:ty,)+) => {
+        CloneTypeFoldableImpls! {
+            for <'tcx> {
+                $($ty,)+
             }
         }
     };
 }
 
 #[macro_export]
-macro_rules! impl_stable_hash_for_spanned {
-    ($T:path) => (
-
-        impl<'a, 'gcx, 'tcx> HashStable<StableHashingContext<'a, 'gcx, 'tcx>> for ::syntax::codemap::Spanned<$T>
-        {
-            #[inline]
-            fn hash_stable<W: StableHasherResult>(&self,
-                                                  hcx: &mut StableHashingContext<'a, 'gcx, 'tcx>,
-                                                  hasher: &mut StableHasher<W>) {
-                self.node.hash_stable(hcx, hasher);
-                self.span.hash_stable(hcx, hasher);
-            }
-        }
-    );
+macro_rules! CloneTypeFoldableAndLiftImpls {
+    ($($t:tt)*) => {
+        CloneTypeFoldableImpls! { $($t)* }
+        CloneLiftImpls! { $($t)* }
+    }
 }
 
+#[macro_export]
+macro_rules! EnumTypeFoldableImpl {
+    (impl<$($p:tt),*> TypeFoldable<$tcx:tt> for $s:path {
+        $($variants:tt)*
+    } $(where $($wc:tt)*)*) => {
+        impl<$($p),*> $crate::ty::fold::TypeFoldable<$tcx> for $s
+            $(where $($wc)*)*
+        {
+            fn super_fold_with<V: $crate::ty::fold::TypeFolder<$tcx>>(
+                &self,
+                folder: &mut V,
+            ) -> Self {
+                EnumTypeFoldableImpl!(@FoldVariants(self, folder) input($($variants)*) output())
+            }
+
+            fn super_visit_with<V: $crate::ty::fold::TypeVisitor<$tcx>>(
+                &self,
+                visitor: &mut V,
+            ) -> bool {
+                EnumTypeFoldableImpl!(@VisitVariants(self, visitor) input($($variants)*) output())
+            }
+        }
+    };
+
+    (@FoldVariants($this:expr, $folder:expr) input() output($($output:tt)*)) => {
+        match $this {
+            $($output)*
+        }
+    };
+
+    (@FoldVariants($this:expr, $folder:expr)
+     input( ($variant:path) ( $($variant_arg:ident),* ) , $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @FoldVariants($this, $folder)
+                input($($input)*)
+                output(
+                    $variant ( $($variant_arg),* ) => {
+                        $variant (
+                            $($crate::ty::fold::TypeFoldable::fold_with($variant_arg, $folder)),*
+                        )
+                    }
+                    $($output)*
+                )
+        )
+    };
+
+    (@FoldVariants($this:expr, $folder:expr)
+     input( ($variant:path) { $($variant_arg:ident),* $(,)? } , $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @FoldVariants($this, $folder)
+                input($($input)*)
+                output(
+                    $variant { $($variant_arg),* } => {
+                        $variant {
+                            $($variant_arg: $crate::ty::fold::TypeFoldable::fold_with(
+                                $variant_arg, $folder
+                            )),* }
+                    }
+                    $($output)*
+                )
+        )
+    };
+
+    (@FoldVariants($this:expr, $folder:expr)
+     input( ($variant:path), $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @FoldVariants($this, $folder)
+                input($($input)*)
+                output(
+                    $variant => { $variant }
+                    $($output)*
+                )
+        )
+    };
+
+    (@VisitVariants($this:expr, $visitor:expr) input() output($($output:tt)*)) => {
+        match $this {
+            $($output)*
+        }
+    };
+
+    (@VisitVariants($this:expr, $visitor:expr)
+     input( ($variant:path) ( $($variant_arg:ident),* ) , $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @VisitVariants($this, $visitor)
+                input($($input)*)
+                output(
+                    $variant ( $($variant_arg),* ) => {
+                        false $(|| $crate::ty::fold::TypeFoldable::visit_with(
+                            $variant_arg, $visitor
+                        ))*
+                    }
+                    $($output)*
+                )
+        )
+    };
+
+    (@VisitVariants($this:expr, $visitor:expr)
+     input( ($variant:path) { $($variant_arg:ident),* $(,)? } , $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @VisitVariants($this, $visitor)
+                input($($input)*)
+                output(
+                    $variant { $($variant_arg),* } => {
+                        false $(|| $crate::ty::fold::TypeFoldable::visit_with(
+                            $variant_arg, $visitor
+                        ))*
+                    }
+                    $($output)*
+                )
+        )
+    };
+
+    (@VisitVariants($this:expr, $visitor:expr)
+     input( ($variant:path), $($input:tt)*)
+     output( $($output:tt)*) ) => {
+        EnumTypeFoldableImpl!(
+            @VisitVariants($this, $visitor)
+                input($($input)*)
+                output(
+                    $variant => { false }
+                    $($output)*
+                )
+        )
+    };
+}

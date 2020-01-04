@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // This test used to be part of a run-pass test, but revised outlives
 // rule means that it no longer compiles.
 
@@ -18,7 +8,7 @@ trait Trait<'a> {
     fn short<'b>(&'b self) -> isize;
 }
 
-fn object_invoke1<'d>(x: &'d Trait<'d>) -> (isize, isize) { loop { } }
+fn object_invoke1<'d>(x: &'d dyn Trait<'d>) -> (isize, isize) { loop { } }
 
 trait MakerTrait {
     fn mk() -> Self;
@@ -28,14 +18,14 @@ fn make_val<T:MakerTrait>() -> T {
     MakerTrait::mk()
 }
 
-impl<'t> MakerTrait for Box<Trait<'t>+'static> {
-    fn mk() -> Box<Trait<'t>+'static> { loop { } }
+impl<'t> MakerTrait for Box<dyn Trait<'t>+'static> {
+    fn mk() -> Box<dyn Trait<'t>+'static> { loop { } }
 }
 
 pub fn main() {
-    let m : Box<Trait+'static> = make_val();
+    let m : Box<dyn Trait+'static> = make_val();
     assert_eq!(object_invoke1(&*m), (4,5));
-    //~^ NOTE borrow occurs here
+    //~^ ERROR `*m` does not live long enough
 
     // the problem here is that the full type of `m` is
     //
@@ -55,7 +45,3 @@ pub fn main() {
     // the type of `m` *strictly outlives* `'m`. Hence we get an
     // error.
 }
-//~^ ERROR `*m` does not live long enough
-//~| NOTE `*m` dropped here while still borrowed
-//~| NOTE values in a scope are dropped in the opposite order they are created
-

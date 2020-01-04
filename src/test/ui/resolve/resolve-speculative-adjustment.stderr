@@ -1,26 +1,27 @@
 error[E0425]: cannot find value `field` in this scope
-  --> $DIR/resolve-speculative-adjustment.rs:27:13
+  --> $DIR/resolve-speculative-adjustment.rs:17:13
    |
-27 |             field;
+LL |             field;
    |             ^^^^^ not found in this scope
 
 error[E0425]: cannot find function `method` in this scope
-  --> $DIR/resolve-speculative-adjustment.rs:30:13
+  --> $DIR/resolve-speculative-adjustment.rs:19:13
    |
-30 |             method();
+LL |             method();
    |             ^^^^^^ not found in this scope
 
 error[E0425]: cannot find value `field` in this scope
-  --> $DIR/resolve-speculative-adjustment.rs:35:9
+  --> $DIR/resolve-speculative-adjustment.rs:23:9
    |
-35 |         field;
-   |         ^^^^^ did you mean `self.field`?
+LL |         field;
+   |         ^^^^^ help: you might have meant to use the available field: `self.field`
 
 error[E0425]: cannot find function `method` in this scope
-  --> $DIR/resolve-speculative-adjustment.rs:38:9
+  --> $DIR/resolve-speculative-adjustment.rs:25:9
    |
-38 |         method();
-   |         ^^^^^^ did you mean `self.method(...)`?
+LL |         method();
+   |         ^^^^^^ help: try: `self.method`
 
-error: aborting due to previous error(s)
+error: aborting due to 4 previous errors
 
+For more information about this error, try `rustc --explain E0425`.

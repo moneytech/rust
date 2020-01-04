@@ -1,25 +1,15 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![allow(overflowing_literals)]
 
-use std::{i64, f32, f64};
+use std::{f32, f64, i64};
 
 mod parse;
 mod rawfp;
 
 // Take a float literal, turn it into a string in various ways (that are all trusted
 // to be correct) and see if those strings are parsed back to the value of the literal.
-// Requires a *polymorphic literal*, i.e. one that can serve as f64 as well as f32.
+// Requires a *polymorphic literal*, i.e., one that can serve as f64 as well as f32.
 macro_rules! test_literal {
-    ($x: expr) => ({
+    ($x: expr) => {{
         let x32: f32 = $x;
         let x64: f64 = $x;
         let inputs = &[stringify!($x).into(), format!("{:?}", x64), format!("{:e}", x64)];
@@ -30,9 +20,10 @@ macro_rules! test_literal {
             assert_eq!(neg_input.parse(), Ok(-x64));
             assert_eq!(neg_input.parse(), Ok(-x32));
         }
-    })
+    }};
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn ordinary() {
     test_literal!(1.0);
@@ -40,9 +31,16 @@ fn ordinary() {
     test_literal!(0.1);
     test_literal!(12345.);
     test_literal!(0.9999999);
+
+    if cfg!(miri) {
+        // Miri is too slow
+        return;
+    }
+
     test_literal!(2.2250738585072014e-308);
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn special_code_paths() {
     test_literal!(36893488147419103229.0); // 2^65 - 3, triggers half-to-even with even significand
@@ -60,6 +58,7 @@ fn large() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Miri is too slow
 fn subnormals() {
     test_literal!(5e-324);
     test_literal!(91e-324);
@@ -71,6 +70,7 @@ fn subnormals() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Miri is too slow
 fn infinity() {
     test_literal!(1e400);
     test_literal!(1e309);
@@ -82,6 +82,12 @@ fn infinity() {
 fn zero() {
     test_literal!(0.0);
     test_literal!(1e-325);
+
+    if cfg!(miri) {
+        // Miri is too slow
+        return;
+    }
+
     test_literal!(1e-326);
     test_literal!(1e-500);
 }
@@ -97,6 +103,12 @@ fn fast_path_correct() {
 fn lonely_dot() {
     assert!(".".parse::<f32>().is_err());
     assert!(".".parse::<f64>().is_err());
+}
+
+#[test]
+fn exponentiated_dot() {
+    assert!(".e0".parse::<f32>().is_err());
+    assert!(".e0".parse::<f64>().is_err());
 }
 
 #[test]

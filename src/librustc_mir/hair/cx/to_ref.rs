@@ -1,24 +1,13 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use hair::*;
+use crate::hair::*;
 
 use rustc::hir;
-use syntax::ptr::P;
 
 pub trait ToRef {
     type Output;
     fn to_ref(self) -> Self::Output;
 }
 
-impl<'a, 'tcx: 'a> ToRef for &'tcx hir::Expr {
+impl<'tcx> ToRef for &'tcx hir::Expr<'tcx> {
     type Output = ExprRef<'tcx>;
 
     fn to_ref(self) -> ExprRef<'tcx> {
@@ -26,7 +15,7 @@ impl<'a, 'tcx: 'a> ToRef for &'tcx hir::Expr {
     }
 }
 
-impl<'a, 'tcx: 'a> ToRef for &'tcx P<hir::Expr> {
+impl<'tcx> ToRef for &'tcx &'tcx hir::Expr<'tcx> {
     type Output = ExprRef<'tcx>;
 
     fn to_ref(self) -> ExprRef<'tcx> {
@@ -34,7 +23,7 @@ impl<'a, 'tcx: 'a> ToRef for &'tcx P<hir::Expr> {
     }
 }
 
-impl<'a, 'tcx: 'a> ToRef for Expr<'tcx> {
+impl<'tcx> ToRef for Expr<'tcx> {
     type Output = ExprRef<'tcx>;
 
     fn to_ref(self) -> ExprRef<'tcx> {
@@ -42,8 +31,9 @@ impl<'a, 'tcx: 'a> ToRef for Expr<'tcx> {
     }
 }
 
-impl<'a, 'tcx: 'a, T, U> ToRef for &'tcx Option<T>
-    where &'tcx T: ToRef<Output = U>
+impl<'tcx, T, U> ToRef for &'tcx Option<T>
+where
+    &'tcx T: ToRef<Output = U>,
 {
     type Output = Option<U>;
 
@@ -52,8 +42,9 @@ impl<'a, 'tcx: 'a, T, U> ToRef for &'tcx Option<T>
     }
 }
 
-impl<'a, 'tcx: 'a, T, U> ToRef for &'tcx Vec<T>
-    where &'tcx T: ToRef<Output = U>
+impl<'tcx, T, U> ToRef for &'tcx Vec<T>
+where
+    &'tcx T: ToRef<Output = U>,
 {
     type Output = Vec<U>;
 
@@ -62,8 +53,9 @@ impl<'a, 'tcx: 'a, T, U> ToRef for &'tcx Vec<T>
     }
 }
 
-impl<'a, 'tcx: 'a, T, U> ToRef for &'tcx P<[T]>
-    where &'tcx T: ToRef<Output = U>
+impl<'tcx, T, U> ToRef for &'tcx [T]
+where
+    &'tcx T: ToRef<Output = U>,
 {
     type Output = Vec<U>;
 

@@ -1,100 +1,102 @@
-error[E0596]: cannot borrow immutable field `z.x` as mutable
-  --> $DIR/issue-39544.rs:21:18
+error[E0596]: cannot borrow `z.x` as mutable, as `z` is not declared as mutable
+  --> $DIR/issue-39544.rs:11:13
    |
-20 |     let z = Z { x: X::Y };
-   |         - consider changing this to `mut z`
-21 |     let _ = &mut z.x;
-   |                  ^^^ cannot mutably borrow immutable field
+LL |     let z = Z { x: X::Y };
+   |         - help: consider changing this to be mutable: `mut z`
+LL |     let _ = &mut z.x;
+   |             ^^^^^^^^ cannot borrow as mutable
 
-error[E0596]: cannot borrow immutable field `self.x` as mutable
-  --> $DIR/issue-39544.rs:26:22
+error[E0596]: cannot borrow `self.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:16:17
    |
-25 |     fn foo<'z>(&'z self) {
-   |                -------- use `&'z mut self` here to make mutable
-26 |         let _ = &mut self.x;
-   |                      ^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo<'z>(&'z self) {
+   |                -------- help: consider changing this to be a mutable reference: `&'z mut self`
+LL |         let _ = &mut self.x;
+   |                 ^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `self.x` as mutable
-  --> $DIR/issue-39544.rs:30:22
+error[E0596]: cannot borrow `self.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:20:17
    |
-29 |     fn foo1(&self, other: &Z) {
-   |             ----- use `&mut self` here to make mutable
-30 |         let _ = &mut self.x;
-   |                      ^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo1(&self, other: &Z) {
+   |             ----- help: consider changing this to be a mutable reference: `&mut self`
+LL |         let _ = &mut self.x;
+   |                 ^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `other.x` as mutable
-  --> $DIR/issue-39544.rs:31:22
+error[E0596]: cannot borrow `other.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:21:17
    |
-29 |     fn foo1(&self, other: &Z) {
-   |                           -- use `&mut Z` here to make mutable
-30 |         let _ = &mut self.x;
-31 |         let _ = &mut other.x;
-   |                      ^^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo1(&self, other: &Z) {
+   |                           -- help: consider changing this to be a mutable reference: `&mut Z`
+LL |         let _ = &mut self.x;
+LL |         let _ = &mut other.x;
+   |                 ^^^^^^^^^^^^ `other` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `self.x` as mutable
-  --> $DIR/issue-39544.rs:35:22
+error[E0596]: cannot borrow `self.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:25:17
    |
-34 |     fn foo2<'a>(&'a self, other: &Z) {
-   |                 -------- use `&'a mut self` here to make mutable
-35 |         let _ = &mut self.x;
-   |                      ^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo2<'a>(&'a self, other: &Z) {
+   |                 -------- help: consider changing this to be a mutable reference: `&'a mut self`
+LL |         let _ = &mut self.x;
+   |                 ^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `other.x` as mutable
-  --> $DIR/issue-39544.rs:36:22
+error[E0596]: cannot borrow `other.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:26:17
    |
-34 |     fn foo2<'a>(&'a self, other: &Z) {
-   |                                  -- use `&mut Z` here to make mutable
-35 |         let _ = &mut self.x;
-36 |         let _ = &mut other.x;
-   |                      ^^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo2<'a>(&'a self, other: &Z) {
+   |                                  -- help: consider changing this to be a mutable reference: `&mut Z`
+LL |         let _ = &mut self.x;
+LL |         let _ = &mut other.x;
+   |                 ^^^^^^^^^^^^ `other` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `self.x` as mutable
-  --> $DIR/issue-39544.rs:40:22
+error[E0596]: cannot borrow `self.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:30:17
    |
-39 |     fn foo3<'a>(self: &'a Self, other: &Z) {
-   |                       -------- use `&'a mut Self` here to make mutable
-40 |         let _ = &mut self.x;
-   |                      ^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo3<'a>(self: &'a Self, other: &Z) {
+   |                       -------- help: consider changing this to be a mutable reference: `&'a mut Self`
+LL |         let _ = &mut self.x;
+   |                 ^^^^^^^^^^^ `self` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `other.x` as mutable
-  --> $DIR/issue-39544.rs:41:22
+error[E0596]: cannot borrow `other.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:31:17
    |
-39 |     fn foo3<'a>(self: &'a Self, other: &Z) {
-   |                                        -- use `&mut Z` here to make mutable
-40 |         let _ = &mut self.x;
-41 |         let _ = &mut other.x;
-   |                      ^^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo3<'a>(self: &'a Self, other: &Z) {
+   |                                        -- help: consider changing this to be a mutable reference: `&mut Z`
+LL |         let _ = &mut self.x;
+LL |         let _ = &mut other.x;
+   |                 ^^^^^^^^^^^^ `other` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `other.x` as mutable
-  --> $DIR/issue-39544.rs:45:22
+error[E0596]: cannot borrow `other.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:35:17
    |
-44 |     fn foo4(other: &Z) {
-   |                    -- use `&mut Z` here to make mutable
-45 |         let _ = &mut other.x;
-   |                      ^^^^^^^ cannot mutably borrow immutable field
+LL |     fn foo4(other: &Z) {
+   |                    -- help: consider changing this to be a mutable reference: `&mut Z`
+LL |         let _ = &mut other.x;
+   |                 ^^^^^^^^^^^^ `other` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0596]: cannot borrow immutable field `z.x` as mutable
-  --> $DIR/issue-39544.rs:51:18
+error[E0596]: cannot borrow `z.x` as mutable, as `z` is not declared as mutable
+  --> $DIR/issue-39544.rs:41:13
    |
-50 | pub fn with_arg(z: Z, w: &Z) {
-   |                 - consider changing this to `mut z`
-51 |     let _ = &mut z.x;
-   |                  ^^^ cannot mutably borrow immutable field
+LL | pub fn with_arg(z: Z, w: &Z) {
+   |                 - help: consider changing this to be mutable: `mut z`
+LL |     let _ = &mut z.x;
+   |             ^^^^^^^^ cannot borrow as mutable
 
-error[E0596]: cannot borrow immutable field `w.x` as mutable
-  --> $DIR/issue-39544.rs:52:18
+error[E0596]: cannot borrow `w.x` as mutable, as it is behind a `&` reference
+  --> $DIR/issue-39544.rs:42:13
    |
-50 | pub fn with_arg(z: Z, w: &Z) {
-   |                          -- use `&mut Z` here to make mutable
-51 |     let _ = &mut z.x;
-52 |     let _ = &mut w.x;
-   |                  ^^^ cannot mutably borrow immutable field
+LL | pub fn with_arg(z: Z, w: &Z) {
+   |                          -- help: consider changing this to be a mutable reference: `&mut Z`
+LL |     let _ = &mut z.x;
+LL |     let _ = &mut w.x;
+   |             ^^^^^^^^ `w` is a `&` reference, so the data it refers to cannot be borrowed as mutable
 
-error[E0594]: cannot assign to immutable borrowed content `*x.0`
-  --> $DIR/issue-39544.rs:58:5
+error[E0594]: cannot assign to `*x.0` which is behind a `&` reference
+  --> $DIR/issue-39544.rs:48:5
    |
-58 |     *x.0 = 1;
-   |     ^^^^^^^^ cannot borrow as mutable
+LL |     *x.0 = 1;
+   |     ^^^^^^^^ cannot assign
 
-error: aborting due to previous error(s)
+error: aborting due to 12 previous errors
 
+Some errors have detailed explanations: E0594, E0596.
+For more information about an error, try `rustc --explain E0594`.

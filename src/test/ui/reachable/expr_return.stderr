@@ -1,14 +1,17 @@
 error: unreachable expression
-  --> $DIR/expr_return.rs:21:22
+  --> $DIR/expr_return.rs:10:22
    |
-21 |     let x = {return {return {return;}}};
-   |                      ^^^^^^^^^^^^^^^^
+LL |     let x = {return {return {return;}}};
+   |                      ^^^^^^^^------^^
+   |                      |       |
+   |                      |       any code following this expression is unreachable
+   |                      unreachable expression
    |
 note: lint level defined here
-  --> $DIR/expr_return.rs:14:9
+  --> $DIR/expr_return.rs:4:9
    |
-14 | #![deny(unreachable_code)]
+LL | #![deny(unreachable_code)]
    |         ^^^^^^^^^^^^^^^^
 
-error: aborting due to previous error(s)
+error: aborting due to previous error
 

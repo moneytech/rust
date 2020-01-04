@@ -1,36 +1,27 @@
-error: variable `theTwo` should have a snake case name such as `the_two`
-  --> $DIR/issue-24690.rs:19:9
+warning: unused variable: `theOtherTwo`
+  --> $DIR/issue-24690.rs:13:9
    |
-19 |     let theTwo = 2;
+LL |     let theOtherTwo = 2;
+   |         ^^^^^^^^^^^ help: consider prefixing with an underscore: `_theOtherTwo`
+   |
+note: lint level defined here
+  --> $DIR/issue-24690.rs:8:9
+   |
+LL | #![warn(unused)]
    |         ^^^^^^
-   |
-   = note: #[deny(non_snake_case)] implied by #[deny(warnings)]
-note: lint level defined here
-  --> $DIR/issue-24690.rs:16:9
-   |
-16 | #![deny(warnings)]
-   |         ^^^^^^^^
+   = note: `#[warn(unused_variables)]` implied by `#[warn(unused)]`
 
-error: variable `theOtherTwo` should have a snake case name such as `the_other_two`
-  --> $DIR/issue-24690.rs:20:9
+warning: variable `theTwo` should have a snake case name
+  --> $DIR/issue-24690.rs:12:9
    |
-20 |     let theOtherTwo = 2;
-   |         ^^^^^^^^^^^
+LL |     let theTwo = 2;
+   |         ^^^^^^ help: convert the identifier to snake case: `the_two`
    |
-   = note: #[deny(non_snake_case)] implied by #[deny(warnings)]
+   = note: `#[warn(non_snake_case)]` on by default
 
-error: unused variable: `theOtherTwo`
-  --> $DIR/issue-24690.rs:20:9
+warning: variable `theOtherTwo` should have a snake case name
+  --> $DIR/issue-24690.rs:13:9
    |
-20 |     let theOtherTwo = 2;
-   |         ^^^^^^^^^^^
-   |
-   = note: #[deny(unused_variables)] implied by #[deny(warnings)]
-note: lint level defined here
-  --> $DIR/issue-24690.rs:16:9
-   |
-16 | #![deny(warnings)]
-   |         ^^^^^^^^
-
-error: aborting due to previous error(s)
+LL |     let theOtherTwo = 2;
+   |         ^^^^^^^^^^^ help: convert the identifier to snake case: `the_other_two`
 

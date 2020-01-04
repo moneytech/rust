@@ -1,23 +1,12 @@
-// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![cfg_attr(test, allow(dead_code))]
 
-use libc;
-use self::imp::{make_handler, drop_handler};
+use self::imp::{drop_handler, make_handler};
 
 pub use self::imp::cleanup;
 pub use self::imp::init;
 
 pub struct Handler {
-    _data: *mut libc::c_void
+    _data: *mut libc::c_void,
 }
 
 impl Handler {
@@ -34,31 +23,27 @@ impl Drop for Handler {
     }
 }
 
-#[cfg(any(target_os = "linux",
-          target_os = "macos",
-          target_os = "bitrig",
-          target_os = "dragonfly",
-          target_os = "freebsd",
-          target_os = "solaris",
-          all(target_os = "netbsd", not(target_vendor = "rumprun")),
-          target_os = "openbsd"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "solaris",
+    all(target_os = "netbsd", not(target_vendor = "rumprun")),
+    target_os = "openbsd"
+))]
 mod imp {
     use super::Handler;
-    use mem;
-    use ptr;
-    use libc::{sigaltstack, SIGSTKSZ, SS_DISABLE};
-    use libc::{sigaction, SIGBUS, SIG_DFL,
-               SA_SIGINFO, SA_ONSTACK, sighandler_t};
-    use libc;
-    use libc::{mmap, munmap};
-    use libc::{SIGSEGV, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANON};
+    use crate::mem;
+    use crate::ptr;
+
     use libc::MAP_FAILED;
+    use libc::{mmap, munmap};
+    use libc::{sigaction, sighandler_t, SA_ONSTACK, SA_SIGINFO, SIGBUS, SIG_DFL};
+    use libc::{sigaltstack, SIGSTKSZ, SS_DISABLE};
+    use libc::{MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE, SIGSEGV};
 
-    use sys_common::thread_info;
-
-
-    // This is initialized in init() and only read from after
-    static mut PAGE_SIZE: usize = 0;
+    use crate::sys_common::thread_info;
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
     unsafe fn siginfo_si_addr(info: *mut libc::siginfo_t) -> usize {
@@ -97,17 +82,19 @@ mod imp {
     // out many large systems and all implementations allow returning from a
     // signal handler to work. For a more detailed explanation see the
     // comments on #26458.
-    unsafe extern fn signal_handler(signum: libc::c_int,
-                                    info: *mut libc::siginfo_t,
-                                    _data: *mut libc::c_void) {
-        use sys_common::util::report_overflow;
+    unsafe extern "C" fn signal_handler(
+        signum: libc::c_int,
+        info: *mut libc::siginfo_t,
+        _data: *mut libc::c_void,
+    ) {
+        use crate::sys_common::util::report_overflow;
 
-        let guard = thread_info::stack_guard().unwrap_or(0);
+        let guard = thread_info::stack_guard().unwrap_or(0..0);
         let addr = siginfo_si_addr(info);
 
         // If the faulting address is within the guard page, then we print a
         // message saying so and abort.
-        if guard != 0 && guard - PAGE_SIZE <= addr && addr < guard {
+        if guard.start <= addr && addr < guard.end {
             report_overflow();
             rtabort!("stack overflow");
         } else {
@@ -123,8 +110,6 @@ mod imp {
     static mut MAIN_ALTSTACK: *mut libc::c_void = ptr::null_mut();
 
     pub unsafe fn init() {
-        PAGE_SIZE = ::sys::os::page_size();
-
         let mut action: sigaction = mem::zeroed();
         action.sa_flags = SA_SIGINFO | SA_ONSTACK;
         action.sa_sigaction = signal_handler as sighandler_t;
@@ -141,30 +126,27 @@ mod imp {
     }
 
     unsafe fn get_stackp() -> *mut libc::c_void {
-        let stackp = mmap(ptr::null_mut(),
-                          SIGSTKSZ,
-                          PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANON,
-                          -1,
-                          0);
+        let stackp =
+            mmap(ptr::null_mut(), SIGSTKSZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if stackp == MAP_FAILED {
             panic!("failed to allocate an alternative stack");
         }
         stackp
     }
 
-    #[cfg(any(target_os = "linux",
-              target_os = "macos",
-              target_os = "bitrig",
-              target_os = "netbsd",
-              target_os = "openbsd",
-              target_os = "solaris"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris"
+    ))]
     unsafe fn get_stack() -> libc::stack_t {
         libc::stack_t { ss_sp: get_stackp(), ss_flags: 0, ss_size: SIGSTKSZ }
     }
 
-    #[cfg(any(target_os = "freebsd",
-              target_os = "dragonfly"))]
+    #[cfg(target_os = "dragonfly")]
     unsafe fn get_stack() -> libc::stack_t {
         libc::stack_t { ss_sp: get_stackp() as *mut i8, ss_flags: 0, ss_size: SIGSTKSZ }
     }
@@ -184,7 +166,7 @@ mod imp {
 
     pub unsafe fn drop_handler(handler: &mut Handler) {
         if !handler._data.is_null() {
-            let stack =  libc::stack_t {
+            let stack = libc::stack_t {
                 ss_sp: ptr::null_mut(),
                 ss_flags: SS_DISABLE,
                 // Workaround for bug in macOS implementation of sigaltstack
@@ -199,27 +181,25 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "linux",
-              target_os = "macos",
-              target_os = "bitrig",
-              target_os = "dragonfly",
-              target_os = "freebsd",
-              target_os = "solaris",
-              all(target_os = "netbsd", not(target_vendor = "rumprun")),
-              target_os = "openbsd")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "solaris",
+    all(target_os = "netbsd", not(target_vendor = "rumprun")),
+    target_os = "openbsd"
+)))]
 mod imp {
-    use ptr;
+    use crate::ptr;
 
-    pub unsafe fn init() {
-    }
+    pub unsafe fn init() {}
 
-    pub unsafe fn cleanup() {
-    }
+    pub unsafe fn cleanup() {}
 
     pub unsafe fn make_handler() -> super::Handler {
         super::Handler { _data: ptr::null_mut() }
     }
 
-    pub unsafe fn drop_handler(_handler: &mut super::Handler) {
-    }
+    pub unsafe fn drop_handler(_handler: &mut super::Handler) {}
 }

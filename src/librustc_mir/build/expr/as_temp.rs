@@ -1,85 +1,108 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! See docs in build/expr/mod.rs
 
-use build::{BlockAnd, BlockAndExtension, Builder};
-use build::expr::category::Category;
-use hair::*;
-use rustc::middle::region::CodeExtent;
+use crate::build::scope::DropKind;
+use crate::build::{BlockAnd, BlockAndExtension, Builder};
+use crate::hair::*;
+use rustc::hir;
+use rustc::middle::region;
 use rustc::mir::*;
+use rustc_span::symbol::sym;
 
-impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
+impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// Compile `expr` into a fresh temporary. This is used when building
     /// up rvalues so as to freeze the value that will be consumed.
-    pub fn as_temp<M>(&mut self,
-                      block: BasicBlock,
-                      temp_lifetime: Option<CodeExtent>,
-                      expr: M)
-                      -> BlockAnd<Lvalue<'tcx>>
-        where M: Mirror<'tcx, Output = Expr<'tcx>>
+    pub fn as_temp<M>(
+        &mut self,
+        block: BasicBlock,
+        temp_lifetime: Option<region::Scope>,
+        expr: M,
+        mutability: Mutability,
+    ) -> BlockAnd<Local>
+    where
+        M: Mirror<'tcx, Output = Expr<'tcx>>,
     {
         let expr = self.hir.mirror(expr);
-        self.expr_as_temp(block, temp_lifetime, expr)
+        self.expr_as_temp(block, temp_lifetime, expr, mutability)
     }
 
-    fn expr_as_temp(&mut self,
-                    mut block: BasicBlock,
-                    temp_lifetime: Option<CodeExtent>,
-                    expr: Expr<'tcx>)
-                    -> BlockAnd<Lvalue<'tcx>> {
-        debug!("expr_as_temp(block={:?}, temp_lifetime={:?}, expr={:?})",
-               block, temp_lifetime, expr);
+    fn expr_as_temp(
+        &mut self,
+        mut block: BasicBlock,
+        temp_lifetime: Option<region::Scope>,
+        expr: Expr<'tcx>,
+        mutability: Mutability,
+    ) -> BlockAnd<Local> {
+        debug!(
+            "expr_as_temp(block={:?}, temp_lifetime={:?}, expr={:?}, mutability={:?})",
+            block, temp_lifetime, expr, mutability
+        );
         let this = self;
 
-        if let ExprKind::Scope { extent, value } = expr.kind {
-            return this.in_scope(extent, block, |this| {
-                this.as_temp(block, temp_lifetime, value)
-            });
-        }
-
-        let expr_ty = expr.ty.clone();
         let expr_span = expr.span;
-        let temp = this.temp(expr_ty.clone(), expr_span);
         let source_info = this.source_info(expr_span);
-
-        if !expr_ty.is_never() && temp_lifetime.is_some() {
-            this.cfg.push(block, Statement {
-                source_info: source_info,
-                kind: StatementKind::StorageLive(temp.clone())
+        if let ExprKind::Scope { region_scope, lint_level, value } = expr.kind {
+            return this.in_scope((region_scope, source_info), lint_level, |this| {
+                this.as_temp(block, temp_lifetime, value, mutability)
             });
         }
 
-        // Careful here not to cause an infinite cycle. If we always
-        // called `into`, then for lvalues like `x.f`, it would
-        // eventually fallback to us, and we'd loop. There's a reason
-        // for this: `as_temp` is the point where we bridge the "by
-        // reference" semantics of `as_lvalue` with the "by value"
-        // semantics of `into`, `as_operand`, `as_rvalue`, and (of
-        // course) `as_temp`.
-        match Category::of(&expr.kind).unwrap() {
-            Category::Lvalue => {
-                let lvalue = unpack!(block = this.as_lvalue(block, expr));
-                let rvalue = Rvalue::Use(Operand::Consume(lvalue));
-                this.cfg.push_assign(block, source_info, &temp, rvalue);
+        let expr_ty = expr.ty;
+        let temp = {
+            let mut local_decl = LocalDecl::new_temp(expr_ty, expr_span);
+            if mutability == Mutability::Not {
+                local_decl = local_decl.immutable();
+            }
+
+            debug!("creating temp {:?} with block_context: {:?}", local_decl, this.block_context);
+            // Find out whether this temp is being created within the
+            // tail expression of a block whose result is ignored.
+            if let Some(tail_info) = this.block_context.currently_in_block_tail() {
+                local_decl = local_decl.block_tail(tail_info);
+            }
+            if let ExprKind::StaticRef { def_id, .. } = expr.kind {
+                let is_thread_local = this.hir.tcx().has_attr(def_id, sym::thread_local);
+                local_decl.local_info = LocalInfo::StaticRef { def_id, is_thread_local };
+            }
+            this.local_decls.push(local_decl)
+        };
+        let temp_place = &Place::from(temp);
+
+        match expr.kind {
+            // Don't bother with StorageLive and Dead for these temporaries,
+            // they are never assigned.
+            ExprKind::Break { .. } | ExprKind::Continue { .. } | ExprKind::Return { .. } => (),
+            ExprKind::Block { body: hir::Block { expr: None, targeted_by_break: false, .. } }
+                if expr_ty.is_never() =>
+            {
+                ()
             }
             _ => {
-                unpack!(block = this.into(&temp, block, expr));
+                this.cfg
+                    .push(block, Statement { source_info, kind: StatementKind::StorageLive(temp) });
+
+                // In constants, `temp_lifetime` is `None` for temporaries that
+                // live for the `'static` lifetime. Thus we do not drop these
+                // temporaries and simply leak them.
+                // This is equivalent to what `let x = &foo();` does in
+                // functions. The temporary is lifted to their surrounding
+                // scope. In a function that means the temporary lives until
+                // just before the function returns. In constants that means it
+                // outlives the constant's initialization value computation.
+                // Anything outliving a constant must have the `'static`
+                // lifetime and live forever.
+                // Anything with a shorter lifetime (e.g the `&foo()` in
+                // `bar(&foo())` or anything within a block will keep the
+                // regular drops just like runtime code.
+                if let Some(temp_lifetime) = temp_lifetime {
+                    this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Storage);
+                }
             }
         }
 
-        // In constants, temp_lifetime is None. We should not need to drop
-        // anything because no values with a destructor can be created in
-        // a constant at this time, even if the type may need dropping.
+        unpack!(block = this.into(temp_place, block, expr));
+
         if let Some(temp_lifetime) = temp_lifetime {
-            this.schedule_drop(expr_span, temp_lifetime, &temp, expr_ty);
+            this.schedule_drop(expr_span, temp_lifetime, temp, DropKind::Value);
         }
 
         block.and(temp)

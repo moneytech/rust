@@ -1,20 +1,16 @@
-#!/bin/bash
-# Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
+#!/usr/bin/env bash
 
 set -ex
 source shared.sh
 
-VERSION=7.51.0
+VERSION=7.66.0
 
-curl http://cool.haxx.se/download/curl-$VERSION.tar.bz2 | tar xjf -
+# This needs to be downloaded directly from S3, it can't go through the CDN.
+# That's because the CDN is backed by CloudFront, which requires SNI and TLSv1
+# (without paying an absurd amount of money).
+curl https://rust-lang-ci-mirrors.s3-us-west-1.amazonaws.com/rustc/curl-$VERSION.tar.xz \
+  | xz --decompress \
+  | tar xf -
 
 mkdir curl-build
 cd curl-build

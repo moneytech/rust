@@ -11,18 +11,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   cmake \
   sudo \
   gdb \
+  libssl-dev \
+  pkg-config \
   xz-utils
 
-RUN curl -o /usr/local/bin/sccache \
-      https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/2017-05-12-sccache-x86_64-unknown-linux-musl && \
-      chmod +x /usr/local/bin/sccache
-
-RUN curl -OL https://github.com/Yelp/dumb-init/releases/download/v1.2.0/dumb-init_1.2.0_amd64.deb && \
-    dpkg -i dumb-init_*.deb && \
-    rm dumb-init_*.deb
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+COPY scripts/sccache.sh /scripts/
+RUN sh /scripts/sccache.sh
 
 ENV RUST_CONFIGURE_ARGS \
       --build=x86_64-unknown-linux-gnu \
       --enable-full-bootstrap
 ENV SCRIPT python2.7 ../x.py build
+
+# In general this just slows down the build and we're just a smoke test that
+# a full bootstrap works in general, so there's not much need to take this
+# penalty in build times.
+ENV NO_LLVM_ASSERTIONS 1
+ENV NO_DEBUG_ASSERTIONS 1

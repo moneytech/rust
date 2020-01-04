@@ -1,25 +1,53 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+use crate::os::unix::prelude::*;
 
-use os::unix::prelude::*;
+use crate::collections::BTreeMap;
+use crate::ffi::{CStr, CString, OsStr, OsString};
+use crate::fmt;
+use crate::io;
+use crate::ptr;
+use crate::sys::fd::FileDesc;
+use crate::sys::fs::File;
+use crate::sys::pipe::{self, AnonPipe};
+use crate::sys_common::process::CommandEnv;
 
-use collections::hash_map::{HashMap, Entry};
-use env;
-use ffi::{OsString, OsStr, CString, CStr};
-use fmt;
-use io;
-use libc::{self, c_int, gid_t, uid_t, c_char};
-use ptr;
-use sys::fd::FileDesc;
-use sys::fs::{File, OpenOptions};
-use sys::pipe::{self, AnonPipe};
+#[cfg(not(target_os = "fuchsia"))]
+use crate::sys::fs::OpenOptions;
+
+use libc::{c_char, c_int, gid_t, uid_t, EXIT_FAILURE, EXIT_SUCCESS};
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "fuchsia")] {
+        // fuchsia doesn't have /dev/null
+    } else if #[cfg(target_os = "redox")] {
+        const DEV_NULL: &'static str = "null:\0";
+    } else {
+        const DEV_NULL: &'static str = "/dev/null\0";
+    }
+}
+
+// Android with api less than 21 define sig* functions inline, so it is not
+// available for dynamic link. Implementing sigemptyset and sigaddset allow us
+// to support older Android version (independent of libc version).
+// The following implementations are based on https://git.io/vSkNf
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "android")] {
+        pub unsafe fn sigemptyset(set: *mut libc::sigset_t) -> libc::c_int {
+            set.write_bytes(0u8, 1);
+            return 0;
+        }
+        #[allow(dead_code)]
+        pub unsafe fn sigaddset(set: *mut libc::sigset_t, signum: libc::c_int) -> libc::c_int {
+            use crate::{slice, mem};
+
+            let raw = slice::from_raw_parts_mut(set as *mut u8, mem::size_of::<libc::sigset_t>());
+            let bit = (signum - 1) as usize;
+            raw[bit / 8] |= 1 << (bit % 8);
+            return 0;
+        }
+    } else {
+        pub use libc::{sigemptyset, sigaddset};
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Command
@@ -45,19 +73,24 @@ pub struct Command {
     // other keys.
     program: CString,
     args: Vec<CString>,
-    env: Option<HashMap<OsString, (usize, CString)>>,
-    argv: Vec<*const c_char>,
-    envp: Option<Vec<*const c_char>>,
+    argv: Argv,
+    env: CommandEnv,
 
     cwd: Option<CString>,
     uid: Option<uid_t>,
     gid: Option<gid_t>,
     saw_nul: bool,
-    closures: Vec<Box<FnMut() -> io::Result<()> + Send + Sync>>,
+    closures: Vec<Box<dyn FnMut() -> io::Result<()> + Send + Sync>>,
     stdin: Option<Stdio>,
     stdout: Option<Stdio>,
     stderr: Option<Stdio>,
 }
+
+// Create a new type for argv, so that we can make it `Send`
+struct Argv(Vec<*const c_char>);
+
+// It is safe to make Argv Send, because it contains pointers to memory owned by `Command.args`
+unsafe impl Send for Argv {}
 
 // passed back to std::process with the pipes connected to the child, if any
 // were requested
@@ -79,6 +112,11 @@ pub enum ChildStdio {
     Inherit,
     Explicit(c_int),
     Owned(FileDesc),
+
+    // On Fuchsia, null stdio is the default, so we simply don't specify
+    // any actions at the time of spawning.
+    #[cfg(target_os = "fuchsia")]
+    Null,
 }
 
 pub enum Stdio {
@@ -93,15 +131,14 @@ impl Command {
         let mut saw_nul = false;
         let program = os2c(program, &mut saw_nul);
         Command {
-            argv: vec![program.as_ptr(), ptr::null()],
-            program: program,
-            args: Vec::new(),
-            env: None,
-            envp: None,
+            argv: Argv(vec![program.as_ptr(), ptr::null()]),
+            args: vec![program.clone()],
+            program,
+            env: Default::default(),
             cwd: None,
             uid: None,
             gid: None,
-            saw_nul: saw_nul,
+            saw_nul,
             closures: Vec::new(),
             stdin: None,
             stdout: None,
@@ -109,78 +146,24 @@ impl Command {
         }
     }
 
+    pub fn set_arg_0(&mut self, arg: &OsStr) {
+        // Set a new arg0
+        let arg = os2c(arg, &mut self.saw_nul);
+        debug_assert!(self.argv.0.len() > 1);
+        self.argv.0[0] = arg.as_ptr();
+        self.args[0] = arg;
+    }
+
     pub fn arg(&mut self, arg: &OsStr) {
         // Overwrite the trailing NULL pointer in `argv` and then add a new null
         // pointer.
         let arg = os2c(arg, &mut self.saw_nul);
-        self.argv[self.args.len() + 1] = arg.as_ptr();
-        self.argv.push(ptr::null());
+        self.argv.0[self.args.len()] = arg.as_ptr();
+        self.argv.0.push(ptr::null());
 
         // Also make sure we keep track of the owned value to schedule a
         // destructor for this memory.
         self.args.push(arg);
-    }
-
-    fn init_env_map(&mut self) -> (&mut HashMap<OsString, (usize, CString)>,
-                                   &mut Vec<*const c_char>) {
-        if self.env.is_none() {
-            let mut map = HashMap::new();
-            let mut envp = Vec::new();
-            for (k, v) in env::vars_os() {
-                let s = pair_to_key(&k, &v, &mut self.saw_nul);
-                envp.push(s.as_ptr());
-                map.insert(k, (envp.len() - 1, s));
-            }
-            envp.push(ptr::null());
-            self.env = Some(map);
-            self.envp = Some(envp);
-        }
-        (self.env.as_mut().unwrap(), self.envp.as_mut().unwrap())
-    }
-
-    pub fn env(&mut self, key: &OsStr, val: &OsStr) {
-        let new_key = pair_to_key(key, val, &mut self.saw_nul);
-        let (map, envp) = self.init_env_map();
-
-        // If `key` is already present then we just update `envp` in place
-        // (and store the owned value), but if it's not there we override the
-        // trailing NULL pointer, add a new NULL pointer, and store where we
-        // were located.
-        match map.entry(key.to_owned()) {
-            Entry::Occupied(mut e) => {
-                let (i, ref mut s) = *e.get_mut();
-                envp[i] = new_key.as_ptr();
-                *s = new_key;
-            }
-            Entry::Vacant(e) => {
-                let len = envp.len();
-                envp[len - 1] = new_key.as_ptr();
-                envp.push(ptr::null());
-                e.insert((len - 1, new_key));
-            }
-        }
-    }
-
-    pub fn env_remove(&mut self, key: &OsStr) {
-        let (map, envp) = self.init_env_map();
-
-        // If we actually ended up removing a key, then we need to update the
-        // position of all keys that come after us in `envp` because they're all
-        // one element sooner now.
-        if let Some((i, _)) = map.remove(key) {
-            envp.remove(i);
-
-            for (_, &mut (ref mut j, _)) in map.iter_mut() {
-                if *j >= i {
-                    *j -= 1;
-                }
-            }
-        }
-    }
-
-    pub fn env_clear(&mut self) {
-        self.env = Some(HashMap::new());
-        self.envp = Some(vec![ptr::null()]);
     }
 
     pub fn cwd(&mut self, dir: &OsStr) {
@@ -196,11 +179,12 @@ impl Command {
     pub fn saw_nul(&self) -> bool {
         self.saw_nul
     }
-    pub fn get_envp(&self) -> &Option<Vec<*const c_char>> {
-        &self.envp
-    }
     pub fn get_argv(&self) -> &Vec<*const c_char> {
-        &self.argv
+        &self.argv.0
+    }
+
+    pub fn get_program(&self) -> &CStr {
+        &*self.program
     }
 
     #[allow(dead_code)]
@@ -216,12 +200,11 @@ impl Command {
         self.gid
     }
 
-    pub fn get_closures(&mut self) -> &mut Vec<Box<FnMut() -> io::Result<()> + Send + Sync>> {
+    pub fn get_closures(&mut self) -> &mut Vec<Box<dyn FnMut() -> io::Result<()> + Send + Sync>> {
         &mut self.closures
     }
 
-    pub fn before_exec(&mut self,
-                       f: Box<FnMut() -> io::Result<()> + Send + Sync>) {
+    pub unsafe fn pre_exec(&mut self, f: Box<dyn FnMut() -> io::Result<()> + Send + Sync>) {
         self.closures.push(f);
     }
 
@@ -237,26 +220,34 @@ impl Command {
         self.stderr = Some(stderr);
     }
 
-    pub fn setup_io(&self, default: Stdio, needs_stdin: bool)
-                -> io::Result<(StdioPipes, ChildPipes)> {
+    pub fn env_mut(&mut self) -> &mut CommandEnv {
+        &mut self.env
+    }
+
+    pub fn capture_env(&mut self) -> Option<CStringArray> {
+        let maybe_env = self.env.capture_if_changed();
+        maybe_env.map(|env| construct_envp(env, &mut self.saw_nul))
+    }
+    #[allow(dead_code)]
+    pub fn env_saw_path(&self) -> bool {
+        self.env.have_changed_path()
+    }
+
+    pub fn setup_io(
+        &self,
+        default: Stdio,
+        needs_stdin: bool,
+    ) -> io::Result<(StdioPipes, ChildPipes)> {
         let null = Stdio::Null;
-        let default_stdin = if needs_stdin {&default} else {&null};
+        let default_stdin = if needs_stdin { &default } else { &null };
         let stdin = self.stdin.as_ref().unwrap_or(default_stdin);
         let stdout = self.stdout.as_ref().unwrap_or(&default);
         let stderr = self.stderr.as_ref().unwrap_or(&default);
         let (their_stdin, our_stdin) = stdin.to_child_stdio(true)?;
         let (their_stdout, our_stdout) = stdout.to_child_stdio(false)?;
         let (their_stderr, our_stderr) = stderr.to_child_stdio(false)?;
-        let ours = StdioPipes {
-            stdin: our_stdin,
-            stdout: our_stdout,
-            stderr: our_stderr,
-        };
-        let theirs = ChildPipes {
-            stdin: their_stdin,
-            stdout: their_stdout,
-            stderr: their_stderr,
-        };
+        let ours = StdioPipes { stdin: our_stdin, stdout: our_stdout, stderr: our_stderr };
+        let theirs = ChildPipes { stdin: their_stdin, stdout: their_stdout, stderr: their_stderr };
         Ok((ours, theirs))
     }
 }
@@ -268,13 +259,57 @@ fn os2c(s: &OsStr, saw_nul: &mut bool) -> CString {
     })
 }
 
+// Helper type to manage ownership of the strings within a C-style array.
+pub struct CStringArray {
+    items: Vec<CString>,
+    ptrs: Vec<*const c_char>,
+}
+
+impl CStringArray {
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut result = CStringArray {
+            items: Vec::with_capacity(capacity),
+            ptrs: Vec::with_capacity(capacity + 1),
+        };
+        result.ptrs.push(ptr::null());
+        result
+    }
+    pub fn push(&mut self, item: CString) {
+        let l = self.ptrs.len();
+        self.ptrs[l - 1] = item.as_ptr();
+        self.ptrs.push(ptr::null());
+        self.items.push(item);
+    }
+    pub fn as_ptr(&self) -> *const *const c_char {
+        self.ptrs.as_ptr()
+    }
+}
+
+fn construct_envp(env: BTreeMap<OsString, OsString>, saw_nul: &mut bool) -> CStringArray {
+    let mut result = CStringArray::with_capacity(env.len());
+    for (k, v) in env {
+        let mut k: OsString = k.into();
+
+        // Reserve additional space for '=' and null terminator
+        k.reserve_exact(v.len() + 2);
+        k.push("=");
+        k.push(&v);
+
+        // Add the new entry into the array
+        if let Ok(item) = CString::new(k.into_vec()) {
+            result.push(item);
+        } else {
+            *saw_nul = true;
+        }
+    }
+
+    result
+}
+
 impl Stdio {
-    pub fn to_child_stdio(&self, readable: bool)
-                      -> io::Result<(ChildStdio, Option<AnonPipe>)> {
+    pub fn to_child_stdio(&self, readable: bool) -> io::Result<(ChildStdio, Option<AnonPipe>)> {
         match *self {
-            Stdio::Inherit => {
-                Ok((ChildStdio::Inherit, None))
-            },
+            Stdio::Inherit => Ok((ChildStdio::Inherit, None)),
 
             // Make sure that the source descriptors are not an stdio
             // descriptor, otherwise the order which we set the child's
@@ -293,24 +328,22 @@ impl Stdio {
 
             Stdio::MakePipe => {
                 let (reader, writer) = pipe::anon_pipe()?;
-                let (ours, theirs) = if readable {
-                    (writer, reader)
-                } else {
-                    (reader, writer)
-                };
+                let (ours, theirs) = if readable { (writer, reader) } else { (reader, writer) };
                 Ok((ChildStdio::Owned(theirs.into_fd()), Some(ours)))
             }
 
+            #[cfg(not(target_os = "fuchsia"))]
             Stdio::Null => {
                 let mut opts = OpenOptions::new();
                 opts.read(readable);
                 opts.write(!readable);
-                let path = unsafe {
-                    CStr::from_ptr("/dev/null\0".as_ptr() as *const _)
-                };
+                let path = unsafe { CStr::from_ptr(DEV_NULL.as_ptr() as *const _) };
                 let fd = File::open_c(&path, &opts)?;
                 Ok((ChildStdio::Owned(fd.into_fd()), None))
             }
+
+            #[cfg(target_os = "fuchsia")]
+            Stdio::Null => Ok((ChildStdio::Null, None)),
         }
     }
 }
@@ -333,80 +366,37 @@ impl ChildStdio {
             ChildStdio::Inherit => None,
             ChildStdio::Explicit(fd) => Some(fd),
             ChildStdio::Owned(ref fd) => Some(fd.raw()),
+
+            #[cfg(target_os = "fuchsia")]
+            ChildStdio::Null => None,
         }
     }
 }
 
-fn pair_to_key(key: &OsStr, value: &OsStr, saw_nul: &mut bool) -> CString {
-    let (key, value) = (key.as_bytes(), value.as_bytes());
-    let mut v = Vec::with_capacity(key.len() + value.len() + 1);
-    v.extend(key);
-    v.push(b'=');
-    v.extend(value);
-    CString::new(v).unwrap_or_else(|_e| {
-        *saw_nul = true;
-        CString::new("foo=bar").unwrap()
-    })
-}
-
 impl fmt::Debug for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.program)?;
-        for arg in &self.args {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.program != self.args[0] {
+            write!(f, "[{:?}] ", self.program)?;
+        }
+        write!(f, "{:?}", self.args[0])?;
+
+        for arg in &self.args[1..] {
             write!(f, " {:?}", arg)?;
         }
         Ok(())
     }
 }
 
-/// Unix exit statuses
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct ExitStatus(c_int);
+pub struct ExitCode(u8);
 
-impl ExitStatus {
-    pub fn new(status: c_int) -> ExitStatus {
-        ExitStatus(status)
-    }
+impl ExitCode {
+    pub const SUCCESS: ExitCode = ExitCode(EXIT_SUCCESS as _);
+    pub const FAILURE: ExitCode = ExitCode(EXIT_FAILURE as _);
 
-    fn exited(&self) -> bool {
-        unsafe { libc::WIFEXITED(self.0) }
-    }
-
-    pub fn success(&self) -> bool {
-        self.code() == Some(0)
-    }
-
-    pub fn code(&self) -> Option<i32> {
-        if self.exited() {
-            Some(unsafe { libc::WEXITSTATUS(self.0) })
-        } else {
-            None
-        }
-    }
-
-    pub fn signal(&self) -> Option<i32> {
-        if !self.exited() {
-            Some(unsafe { libc::WTERMSIG(self.0) })
-        } else {
-            None
-        }
-    }
-}
-
-impl From<c_int> for ExitStatus {
-    fn from(a: c_int) -> ExitStatus {
-        ExitStatus(a)
-    }
-}
-
-impl fmt::Display for ExitStatus {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(code) = self.code() {
-            write!(f, "exit code: {}", code)
-        } else {
-            let signal = self.signal().unwrap();
-            write!(f, "signal: {}", signal)
-        }
+    #[inline]
+    pub fn as_i32(&self) -> i32 {
+        self.0 as i32
     }
 }
 
@@ -414,11 +404,10 @@ impl fmt::Display for ExitStatus {
 mod tests {
     use super::*;
 
-    use ffi::OsStr;
-    use mem;
-    use ptr;
-    use libc;
-    use sys::cvt;
+    use crate::ffi::OsStr;
+    use crate::mem;
+    use crate::ptr;
+    use crate::sys::cvt;
 
     macro_rules! t {
         ($e:expr) => {
@@ -426,37 +415,7 @@ mod tests {
                 Ok(t) => t,
                 Err(e) => panic!("received error for `{}`: {}", stringify!($e), e),
             }
-        }
-    }
-
-    // Android with api less than 21 define sig* functions inline, so it is not
-    // available for dynamic link. Implementing sigemptyset and sigaddset allow us
-    // to support older Android version (independent of libc version).
-    // The following implementations are based on https://git.io/vSkNf
-
-    #[cfg(not(target_os = "android"))]
-    extern {
-        #[cfg_attr(target_os = "netbsd", link_name = "__sigemptyset14")]
-        fn sigemptyset(set: *mut libc::sigset_t) -> libc::c_int;
-
-        #[cfg_attr(target_os = "netbsd", link_name = "__sigaddset14")]
-        fn sigaddset(set: *mut libc::sigset_t, signum: libc::c_int) -> libc::c_int;
-    }
-
-    #[cfg(target_os = "android")]
-    unsafe fn sigemptyset(set: *mut libc::sigset_t) -> libc::c_int {
-        libc::memset(set as *mut _, 0, mem::size_of::<libc::sigset_t>());
-        return 0;
-    }
-
-    #[cfg(target_os = "android")]
-    unsafe fn sigaddset(set: *mut libc::sigset_t, signum: libc::c_int) -> libc::c_int {
-        use slice;
-
-        let raw = slice::from_raw_parts_mut(set as *mut u8, mem::size_of::<libc::sigset_t>());
-        let bit = (signum - 1) as usize;
-        raw[bit / 8] |= 1 << (bit % 8);
-        return 0;
+        };
     }
 
     // See #14232 for more information, but it appears that signal delivery to a
@@ -464,21 +423,21 @@ mod tests {
     // test from being flaky we ignore it on macOS.
     #[test]
     #[cfg_attr(target_os = "macos", ignore)]
-    #[cfg_attr(target_os = "nacl", ignore)] // no signals on NaCl.
     // When run under our current QEMU emulation test suite this test fails,
     // although the reason isn't very clear as to why. For now this test is
     // ignored there.
     #[cfg_attr(target_arch = "arm", ignore)]
+    #[cfg_attr(target_arch = "aarch64", ignore)]
     fn test_process_mask() {
         unsafe {
             // Test to make sure that a signal mask does not get inherited.
             let mut cmd = Command::new(OsStr::new("cat"));
 
-            let mut set: libc::sigset_t = mem::uninitialized();
-            let mut old_set: libc::sigset_t = mem::uninitialized();
-            t!(cvt(sigemptyset(&mut set)));
-            t!(cvt(sigaddset(&mut set, libc::SIGINT)));
-            t!(cvt(libc::pthread_sigmask(libc::SIG_SETMASK, &set, &mut old_set)));
+            let mut set = mem::MaybeUninit::<libc::sigset_t>::uninit();
+            let mut old_set = mem::MaybeUninit::<libc::sigset_t>::uninit();
+            t!(cvt(sigemptyset(set.as_mut_ptr())));
+            t!(cvt(sigaddset(set.as_mut_ptr(), libc::SIGINT)));
+            t!(cvt(libc::pthread_sigmask(libc::SIG_SETMASK, set.as_ptr(), old_set.as_mut_ptr())));
 
             cmd.stdin(Stdio::MakePipe);
             cmd.stdout(Stdio::MakePipe);
@@ -487,8 +446,7 @@ mod tests {
             let stdin_write = pipes.stdin.take().unwrap();
             let stdout_read = pipes.stdout.take().unwrap();
 
-            t!(cvt(libc::pthread_sigmask(libc::SIG_SETMASK, &old_set,
-                                         ptr::null_mut())));
+            t!(cvt(libc::pthread_sigmask(libc::SIG_SETMASK, old_set.as_ptr(), ptr::null_mut())));
 
             t!(cvt(libc::kill(cat.id() as libc::pid_t, libc::SIGINT)));
             // We need to wait until SIGINT is definitely delivered. The

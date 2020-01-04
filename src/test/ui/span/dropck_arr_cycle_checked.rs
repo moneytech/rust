@@ -1,19 +1,9 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Reject mixing cyclic structure and Drop when using fixed length
 // arrays.
 //
 // (Compare against compile-fail/dropck_vec_cycle_checked.rs)
 
-#![feature(const_fn)]
+
 
 use std::cell::Cell;
 use id::Id;
@@ -101,18 +91,15 @@ fn f() {
     b2 = B::new();
     b3 = B::new();
     b1.a[0].v.set(Some(&b2));
+    //~^ ERROR `b2` does not live long enough
     b1.a[1].v.set(Some(&b3));
+    //~^ ERROR `b3` does not live long enough
     b2.a[0].v.set(Some(&b2));
     b2.a[1].v.set(Some(&b3));
     b3.a[0].v.set(Some(&b1));
+    //~^ ERROR `b1` does not live long enough
     b3.a[1].v.set(Some(&b2));
 }
-//~^ ERROR `b2` does not live long enough
-//~| ERROR `b3` does not live long enough
-//~| ERROR `b2` does not live long enough
-//~| ERROR `b3` does not live long enough
-//~| ERROR `b1` does not live long enough
-//~| ERROR `b2` does not live long enough
 
 fn main() {
     f();

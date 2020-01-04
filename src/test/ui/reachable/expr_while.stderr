@@ -1,31 +1,32 @@
-error: unreachable statement
-  --> $DIR/expr_while.rs:19:9
+error: unreachable block in `while` expression
+  --> $DIR/expr_while.rs:7:20
    |
-19 |         println!("Hello, world!");
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+LL |       while {return} {
+   |  ____________------__^
+   | |            |
+   | |            any code following this expression is unreachable
+LL | |
+LL | |         println!("Hello, world!");
+LL | |     }
+   | |_____^ unreachable block in `while` expression
    |
 note: lint level defined here
-  --> $DIR/expr_while.rs:14:9
+  --> $DIR/expr_while.rs:4:9
    |
-14 | #![deny(unreachable_code)]
+LL | #![deny(unreachable_code)]
    |         ^^^^^^^^^^^^^^^^
-   = note: this error originates in a macro outside of the current crate
 
-error: unreachable statement
-  --> $DIR/expr_while.rs:33:9
+error: unreachable block in `while` expression
+  --> $DIR/expr_while.rs:22:20
    |
-33 |         println!("I am dead.");
-   |         ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: this error originates in a macro outside of the current crate
+LL |       while {return} {
+   |  ____________------__^
+   | |            |
+   | |            any code following this expression is unreachable
+LL | |
+LL | |         println!("I am dead.");
+LL | |     }
+   | |_____^ unreachable block in `while` expression
 
-error: unreachable statement
-  --> $DIR/expr_while.rs:35:5
-   |
-35 |     println!("I am, too.");
-   |     ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: this error originates in a macro outside of the current crate
-
-error: aborting due to previous error(s)
+error: aborting due to 2 previous errors
 

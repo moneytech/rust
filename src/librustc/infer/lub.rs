@@ -1,51 +1,50 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use super::combine::CombineFields;
-use super::InferCtxt;
 use super::lattice::{self, LatticeDir};
+use super::InferCtxt;
 use super::Subtype;
 
-use traits::ObligationCause;
-use ty::{self, Ty, TyCtxt};
-use ty::relate::{Relate, RelateResult, TypeRelation};
+use crate::traits::ObligationCause;
+use crate::ty::relate::{Relate, RelateResult, TypeRelation};
+use crate::ty::{self, Ty, TyCtxt};
 
 /// "Least upper bound" (common supertype)
-pub struct Lub<'combine, 'infcx: 'combine, 'gcx: 'infcx+'tcx, 'tcx: 'infcx> {
-    fields: &'combine mut CombineFields<'infcx, 'gcx, 'tcx>,
+pub struct Lub<'combine, 'infcx, 'tcx> {
+    fields: &'combine mut CombineFields<'infcx, 'tcx>,
     a_is_expected: bool,
 }
 
-impl<'combine, 'infcx, 'gcx, 'tcx> Lub<'combine, 'infcx, 'gcx, 'tcx> {
-    pub fn new(fields: &'combine mut CombineFields<'infcx, 'gcx, 'tcx>, a_is_expected: bool)
-        -> Lub<'combine, 'infcx, 'gcx, 'tcx>
-    {
+impl<'combine, 'infcx, 'tcx> Lub<'combine, 'infcx, 'tcx> {
+    pub fn new(
+        fields: &'combine mut CombineFields<'infcx, 'tcx>,
+        a_is_expected: bool,
+    ) -> Lub<'combine, 'infcx, 'tcx> {
         Lub { fields: fields, a_is_expected: a_is_expected }
     }
 }
 
-impl<'combine, 'infcx, 'gcx, 'tcx> TypeRelation<'infcx, 'gcx, 'tcx>
-    for Lub<'combine, 'infcx, 'gcx, 'tcx>
-{
-    fn tag(&self) -> &'static str { "Lub" }
+impl TypeRelation<'tcx> for Lub<'combine, 'infcx, 'tcx> {
+    fn tag(&self) -> &'static str {
+        "Lub"
+    }
 
-    fn tcx(&self) -> TyCtxt<'infcx, 'gcx, 'tcx> { self.fields.tcx() }
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.fields.tcx()
+    }
 
-    fn a_is_expected(&self) -> bool { self.a_is_expected }
+    fn param_env(&self) -> ty::ParamEnv<'tcx> {
+        self.fields.param_env
+    }
 
-    fn relate_with_variance<T: Relate<'tcx>>(&mut self,
-                                             variance: ty::Variance,
-                                             a: &T,
-                                             b: &T)
-                                             -> RelateResult<'tcx, T>
-    {
+    fn a_is_expected(&self) -> bool {
+        self.a_is_expected
+    }
+
+    fn relate_with_variance<T: Relate<'tcx>>(
+        &mut self,
+        variance: ty::Variance,
+        a: &T,
+        b: &T,
+    ) -> RelateResult<'tcx, T> {
         match variance {
             ty::Invariant => self.fields.equate(self.a_is_expected).relate(a, b),
             ty::Covariant => self.relate(a, b),
@@ -59,29 +58,45 @@ impl<'combine, 'infcx, 'gcx, 'tcx> TypeRelation<'infcx, 'gcx, 'tcx>
         lattice::super_lattice_tys(self, a, b)
     }
 
-    fn regions(&mut self, a: ty::Region<'tcx>, b: ty::Region<'tcx>)
-               -> RelateResult<'tcx, ty::Region<'tcx>> {
-        debug!("{}.regions({:?}, {:?})",
-               self.tag(),
-               a,
-               b);
+    fn regions(
+        &mut self,
+        a: ty::Region<'tcx>,
+        b: ty::Region<'tcx>,
+    ) -> RelateResult<'tcx, ty::Region<'tcx>> {
+        debug!("{}.regions({:?}, {:?})", self.tag(), a, b);
 
-        let origin = Subtype(self.fields.trace.clone());
-        Ok(self.fields.infcx.region_vars.lub_regions(origin, a, b))
+        let origin = Subtype(box self.fields.trace.clone());
+        Ok(self.fields.infcx.borrow_region_constraints().lub_regions(self.tcx(), origin, a, b))
     }
 
-    fn binders<T>(&mut self, a: &ty::Binder<T>, b: &ty::Binder<T>)
-                  -> RelateResult<'tcx, ty::Binder<T>>
-        where T: Relate<'tcx>
+    fn consts(
+        &mut self,
+        a: &'tcx ty::Const<'tcx>,
+        b: &'tcx ty::Const<'tcx>,
+    ) -> RelateResult<'tcx, &'tcx ty::Const<'tcx>> {
+        self.fields.infcx.super_combine_consts(self, a, b)
+    }
+
+    fn binders<T>(
+        &mut self,
+        a: &ty::Binder<T>,
+        b: &ty::Binder<T>,
+    ) -> RelateResult<'tcx, ty::Binder<T>>
+    where
+        T: Relate<'tcx>,
     {
-        self.fields.higher_ranked_lub(a, b, self.a_is_expected)
+        debug!("binders(a={:?}, b={:?})", a, b);
+
+        // When higher-ranked types are involved, computing the LUB is
+        // very challenging, switch to invariance. This is obviously
+        // overly conservative but works ok in practice.
+        self.relate_with_variance(ty::Variance::Invariant, a, b)?;
+        Ok(a.clone())
     }
 }
 
-impl<'combine, 'infcx, 'gcx, 'tcx> LatticeDir<'infcx, 'gcx, 'tcx>
-    for Lub<'combine, 'infcx, 'gcx, 'tcx>
-{
-    fn infcx(&self) -> &'infcx InferCtxt<'infcx, 'gcx, 'tcx> {
+impl<'combine, 'infcx, 'tcx> LatticeDir<'infcx, 'tcx> for Lub<'combine, 'infcx, 'tcx> {
+    fn infcx(&self) -> &'infcx InferCtxt<'infcx, 'tcx> {
         self.fields.infcx
     }
 

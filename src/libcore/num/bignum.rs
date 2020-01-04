@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Custom arbitrary-precision number (bignum) implementation.
 //!
 //! This is designed to avoid the heap allocation at expense of stack memory.
@@ -22,13 +12,15 @@
 // This module is only for dec2flt and flt2dec, and only public because of coretests.
 // It is not intended to ever be stabilized.
 #![doc(hidden)]
-#![unstable(feature = "core_private_bignum",
-            reason = "internal routines only exposed for testing",
-            issue = "0")]
+#![unstable(
+    feature = "core_private_bignum",
+    reason = "internal routines only exposed for testing",
+    issue = "none"
+)]
 #![macro_use]
 
-use mem;
-use intrinsics;
+use crate::intrinsics;
+use crate::mem;
 
 /// Arithmetic operations required by bignums.
 pub trait FullOps: Sized {
@@ -46,10 +38,8 @@ pub trait FullOps: Sized {
 
     /// Returns `(quo, rem)` such that `borrow * 2^W + self = quo * other + rem`
     /// and `0 <= rem < other`, where `W` is the number of bits in `Self`.
-    fn full_div_rem(self,
-                    other: Self,
-                    borrow: Self)
-                    -> (Self /* quotient */, Self /* remainder */);
+    fn full_div_rem(self, other: Self, borrow: Self)
+    -> (Self /* quotient */, Self /* remainder */);
 }
 
 macro_rules! impl_full_ops {
@@ -57,24 +47,25 @@ macro_rules! impl_full_ops {
         $(
             impl FullOps for $ty {
                 fn full_add(self, other: $ty, carry: bool) -> (bool, $ty) {
-                    // this cannot overflow, the output is between 0 and 2*2^nbits - 1
-                    // FIXME will LLVM optimize this into ADC or similar???
-                    let (v, carry1) = unsafe { intrinsics::add_with_overflow(self, other) };
-                    let (v, carry2) = unsafe {
-                        intrinsics::add_with_overflow(v, if carry {1} else {0})
-                    };
+                    // This cannot overflow; the output is between `0` and `2 * 2^nbits - 1`.
+                    // FIXME: will LLVM optimize this into ADC or similar?
+                    let (v, carry1) = intrinsics::add_with_overflow(self, other);
+                    let (v, carry2) = intrinsics::add_with_overflow(v, if carry {1} else {0});
                     (carry1 || carry2, v)
                 }
 
                 fn full_mul(self, other: $ty, carry: $ty) -> ($ty, $ty) {
-                    // this cannot overflow, the output is between 0 and 2^nbits * (2^nbits - 1)
+                    // This cannot overflow;
+                    // the output is between `0` and `2^nbits * (2^nbits - 1)`.
+                    // FIXME: will LLVM optimize this into ADC or similar?
                     let nbits = mem::size_of::<$ty>() * 8;
                     let v = (self as $bigty) * (other as $bigty) + (carry as $bigty);
                     ((v >> nbits) as $ty, v as $ty)
                 }
 
                 fn full_mul_add(self, other: $ty, other2: $ty, carry: $ty) -> ($ty, $ty) {
-                    // this cannot overflow, the output is between 0 and 2^(2*nbits) - 1
+                    // This cannot overflow;
+                    // the output is between `0` and `2^nbits * (2^nbits - 1)`.
                     let nbits = mem::size_of::<$ty>() * 8;
                     let v = (self as $bigty) * (other as $bigty) + (other2 as $bigty) +
                             (carry as $bigty);
@@ -83,7 +74,7 @@ macro_rules! impl_full_ops {
 
                 fn full_div_rem(self, other: $ty, borrow: $ty) -> ($ty, $ty) {
                     debug_assert!(borrow < other);
-                    // this cannot overflow, the dividend is between 0 and other * 2^nbits - 1
+                    // This cannot overflow; the output is between `0` and `other * (2^nbits - 1)`.
                     let nbits = mem::size_of::<$ty>() * 8;
                     let lhs = ((borrow as $bigty) << nbits) | (self as $bigty);
                     let rhs = other as $bigty;
@@ -98,7 +89,8 @@ impl_full_ops! {
     u8:  add(intrinsics::u8_add_with_overflow),  mul/div(u16);
     u16: add(intrinsics::u16_add_with_overflow), mul/div(u32);
     u32: add(intrinsics::u32_add_with_overflow), mul/div(u64);
-//  u64: add(intrinsics::u64_add_with_overflow), mul/div(u128); // see RFC #521 for enabling this.
+    // See RFC #521 for enabling this.
+    // u64: add(intrinsics::u64_add_with_overflow), mul/div(u128);
 }
 
 /// Table of powers of 5 representable in digits. Specifically, the largest {u8, u16, u32} value
@@ -106,7 +98,7 @@ impl_full_ops! {
 const SMALL_POW5: [(u64, usize); 3] = [(125, 3), (15625, 6), (1_220_703_125, 13)];
 
 macro_rules! define_bignum {
-    ($name:ident: type=$ty:ty, n=$n:expr) => (
+    ($name:ident: type=$ty:ty, n=$n:expr) => {
         /// Stack-allocated arbitrary-precision (up to certain limit) integer.
         ///
         /// This is backed by a fixed-size array of given type ("digit").
@@ -114,7 +106,7 @@ macro_rules! define_bignum {
         /// copying it recklessly may result in the performance hit.
         /// Thus this is intentionally not `Copy`.
         ///
-        /// All operations available to bignums panic in the case of over/underflows.
+        /// All operations available to bignums panic in the case of overflows.
         /// The caller is responsible to use large enough bignum types.
         pub struct $name {
             /// One plus the offset to the maximum "digit" in use.
@@ -123,7 +115,7 @@ macro_rules! define_bignum {
             size: usize,
             /// Digits. `[a, b, c, ...]` represents `a + b*2^W + c*2^(2W) + ...`
             /// where `W` is the number of bits in the digit type.
-            base: [$ty; $n]
+            base: [$ty; $n],
         }
 
         impl $name {
@@ -136,7 +128,7 @@ macro_rules! define_bignum {
 
             /// Makes a bignum from `u64` value.
             pub fn from_u64(mut v: u64) -> $name {
-                use mem;
+                use crate::mem;
 
                 let mut base = [0; $n];
                 let mut sz = 0;
@@ -158,7 +150,7 @@ macro_rules! define_bignum {
             /// Returns the `i`-th bit where bit 0 is the least significant one.
             /// In other words, the bit with weight `2^i`.
             pub fn get_bit(&self, i: usize) -> u8 {
-                use mem;
+                use crate::mem;
 
                 let digitbits = mem::size_of::<$ty>() * 8;
                 let d = i / digitbits;
@@ -174,7 +166,7 @@ macro_rules! define_bignum {
             /// Returns the number of bits necessary to represent this value. Note that zero
             /// is considered to need 0 bits.
             pub fn bit_length(&self) -> usize {
-                use mem;
+                use crate::mem;
 
                 // Skip over the most significant digits which are zero.
                 let digits = self.digits();
@@ -183,12 +175,12 @@ macro_rules! define_bignum {
                 let nonzero = &digits[..end];
 
                 if nonzero.is_empty() {
-                    // There are no non-zero digits, i.e. the number is zero.
+                    // There are no non-zero digits, i.e., the number is zero.
                     return 0;
                 }
                 // This could be optimized with leading_zeros() and bit shifts, but that's
                 // probably not worth the hassle.
-                let digitbits = mem::size_of::<$ty>()* 8;
+                let digitbits = mem::size_of::<$ty>() * 8;
                 let mut i = nonzero.len() * digitbits - 1;
                 while self.get_bit(i) == 0 {
                     i -= 1;
@@ -198,8 +190,8 @@ macro_rules! define_bignum {
 
             /// Adds `other` to itself and returns its own mutable reference.
             pub fn add<'a>(&'a mut self, other: &$name) -> &'a mut $name {
-                use cmp;
-                use num::bignum::FullOps;
+                use crate::cmp;
+                use crate::num::bignum::FullOps;
 
                 let mut sz = cmp::max(self.size, other.size);
                 let mut carry = false;
@@ -217,7 +209,7 @@ macro_rules! define_bignum {
             }
 
             pub fn add_small(&mut self, other: $ty) -> &mut $name {
-                use num::bignum::FullOps;
+                use crate::num::bignum::FullOps;
 
                 let (mut carry, v) = self.base[0].full_add(other, false);
                 self.base[0] = v;
@@ -236,8 +228,8 @@ macro_rules! define_bignum {
 
             /// Subtracts `other` from itself and returns its own mutable reference.
             pub fn sub<'a>(&'a mut self, other: &$name) -> &'a mut $name {
-                use cmp;
-                use num::bignum::FullOps;
+                use crate::cmp;
+                use crate::num::bignum::FullOps;
 
                 let sz = cmp::max(self.size, other.size);
                 let mut noborrow = true;
@@ -254,7 +246,7 @@ macro_rules! define_bignum {
             /// Multiplies itself by a digit-sized `other` and returns its own
             /// mutable reference.
             pub fn mul_small(&mut self, other: $ty) -> &mut $name {
-                use num::bignum::FullOps;
+                use crate::num::bignum::FullOps;
 
                 let mut sz = self.size;
                 let mut carry = 0;
@@ -273,19 +265,19 @@ macro_rules! define_bignum {
 
             /// Multiplies itself by `2^bits` and returns its own mutable reference.
             pub fn mul_pow2(&mut self, bits: usize) -> &mut $name {
-                use mem;
+                use crate::mem;
 
                 let digitbits = mem::size_of::<$ty>() * 8;
                 let digits = bits / digitbits;
                 let bits = bits % digitbits;
 
                 assert!(digits < $n);
-                debug_assert!(self.base[$n-digits..].iter().all(|&v| v == 0));
-                debug_assert!(bits == 0 || (self.base[$n-digits-1] >> (digitbits - bits)) == 0);
+                debug_assert!(self.base[$n - digits..].iter().all(|&v| v == 0));
+                debug_assert!(bits == 0 || (self.base[$n - digits - 1] >> (digitbits - bits)) == 0);
 
                 // shift by `digits * digitbits` bits
                 for i in (0..self.size).rev() {
-                    self.base[i+digits] = self.base[i];
+                    self.base[i + digits] = self.base[i];
                 }
                 for i in 0..digits {
                     self.base[i] = 0;
@@ -295,14 +287,14 @@ macro_rules! define_bignum {
                 let mut sz = self.size + digits;
                 if bits > 0 {
                     let last = sz;
-                    let overflow = self.base[last-1] >> (digitbits - bits);
+                    let overflow = self.base[last - 1] >> (digitbits - bits);
                     if overflow > 0 {
                         self.base[last] = overflow;
                         sz += 1;
                     }
-                    for i in (digits+1..last).rev() {
-                        self.base[i] = (self.base[i] << bits) |
-                                       (self.base[i-1] >> (digitbits - bits));
+                    for i in (digits + 1..last).rev() {
+                        self.base[i] =
+                            (self.base[i] << bits) | (self.base[i - 1] >> (digitbits - bits));
                     }
                     self.base[digits] <<= bits;
                     // self.base[..digits] is zero, no need to shift
@@ -314,8 +306,8 @@ macro_rules! define_bignum {
 
             /// Multiplies itself by `5^e` and returns its own mutable reference.
             pub fn mul_pow5(&mut self, mut e: usize) -> &mut $name {
-                use mem;
-                use num::bignum::SMALL_POW5;
+                use crate::mem;
+                use crate::num::bignum::SMALL_POW5;
 
                 // There are exactly n trailing zeros on 2^n, and the only relevant digit sizes
                 // are consecutive powers of two, so this is well suited index for the table.
@@ -339,18 +331,19 @@ macro_rules! define_bignum {
                 self
             }
 
-
             /// Multiplies itself by a number described by `other[0] + other[1] * 2^W +
             /// other[2] * 2^(2W) + ...` (where `W` is the number of bits in the digit type)
             /// and returns its own mutable reference.
             pub fn mul_digits<'a>(&'a mut self, other: &[$ty]) -> &'a mut $name {
                 // the internal routine. works best when aa.len() <= bb.len().
                 fn mul_inner(ret: &mut [$ty; $n], aa: &[$ty], bb: &[$ty]) -> usize {
-                    use num::bignum::FullOps;
+                    use crate::num::bignum::FullOps;
 
                     let mut retsz = 0;
                     for (i, &a) in aa.iter().enumerate() {
-                        if a == 0 { continue; }
+                        if a == 0 {
+                            continue;
+                        }
                         let mut sz = bb.len();
                         let mut carry = 0;
                         for (j, &b) in bb.iter().enumerate() {
@@ -383,7 +376,7 @@ macro_rules! define_bignum {
             /// Divides itself by a digit-sized `other` and returns its own
             /// mutable reference *and* the remainder.
             pub fn div_rem_small(&mut self, other: $ty) -> (&mut $name, $ty) {
-                use num::bignum::FullOps;
+                use crate::num::bignum::FullOps;
 
                 assert!(other > 0);
 
@@ -400,7 +393,7 @@ macro_rules! define_bignum {
             /// Divide self by another bignum, overwriting `q` with the quotient and `r` with the
             /// remainder.
             pub fn div_rem(&self, d: &$name, q: &mut $name, r: &mut $name) {
-                use mem;
+                use crate::mem;
 
                 // Stupid slow base-2 long division taken from
                 // https://en.wikipedia.org/wiki/Division_algorithm
@@ -437,22 +430,23 @@ macro_rules! define_bignum {
             }
         }
 
-        impl ::cmp::PartialEq for $name {
-            fn eq(&self, other: &$name) -> bool { self.base[..] == other.base[..] }
-        }
-
-        impl ::cmp::Eq for $name {
-        }
-
-        impl ::cmp::PartialOrd for $name {
-            fn partial_cmp(&self, other: &$name) -> ::option::Option<::cmp::Ordering> {
-                ::option::Option::Some(self.cmp(other))
+        impl crate::cmp::PartialEq for $name {
+            fn eq(&self, other: &$name) -> bool {
+                self.base[..] == other.base[..]
             }
         }
 
-        impl ::cmp::Ord for $name {
-            fn cmp(&self, other: &$name) -> ::cmp::Ordering {
-                use cmp::max;
+        impl crate::cmp::Eq for $name {}
+
+        impl crate::cmp::PartialOrd for $name {
+            fn partial_cmp(&self, other: &$name) -> crate::option::Option<crate::cmp::Ordering> {
+                crate::option::Option::Some(self.cmp(other))
+            }
+        }
+
+        impl crate::cmp::Ord for $name {
+            fn cmp(&self, other: &$name) -> crate::cmp::Ordering {
+                use crate::cmp::max;
                 let sz = max(self.size, other.size);
                 let lhs = self.base[..sz].iter().cloned().rev();
                 let rhs = other.base[..sz].iter().cloned().rev();
@@ -460,27 +454,27 @@ macro_rules! define_bignum {
             }
         }
 
-        impl ::clone::Clone for $name {
+        impl crate::clone::Clone for $name {
             fn clone(&self) -> $name {
                 $name { size: self.size, base: self.base }
             }
         }
 
-        impl ::fmt::Debug for $name {
-            fn fmt(&self, f: &mut ::fmt::Formatter) -> ::fmt::Result {
-                use mem;
+        impl crate::fmt::Debug for $name {
+            fn fmt(&self, f: &mut crate::fmt::Formatter<'_>) -> crate::fmt::Result {
+                use crate::mem;
 
-                let sz = if self.size < 1 {1} else {self.size};
+                let sz = if self.size < 1 { 1 } else { self.size };
                 let digitlen = mem::size_of::<$ty>() * 2;
 
-                write!(f, "{:#x}", self.base[sz-1])?;
-                for &v in self.base[..sz-1].iter().rev() {
+                write!(f, "{:#x}", self.base[sz - 1])?;
+                for &v in self.base[..sz - 1].iter().rev() {
                     write!(f, "_{:01$x}", v, digitlen)?;
                 }
-                ::result::Result::Ok(())
+                crate::result::Result::Ok(())
             }
         }
-    )
+    };
 }
 
 /// The digit type for `Big32x40`.

@@ -1,22 +1,29 @@
 error[E0597]: `x` does not live long enough
-  --> $DIR/issue-29106.rs:27:5
+  --> $DIR/issue-29106.rs:16:26
    |
-26 |         y = Arc::new(Foo(&x));
-   |                           - borrow occurs here
-27 |     } //~ ERROR `x` does not live long enough
-   |     ^ `x` dropped here while still borrowed
+LL |         y = Arc::new(Foo(&x));
+   |                          ^^ borrowed value does not live long enough
+LL |     }
+   |     -
+   |     |
+   |     `x` dropped here while still borrowed
+   |     borrow might be used here, when `y` is dropped and runs the `Drop` code for type `std::sync::Arc`
    |
-   = note: values in a scope are dropped in the opposite order they are created
+   = note: values in a scope are dropped in the opposite order they are defined
 
 error[E0597]: `x` does not live long enough
-  --> $DIR/issue-29106.rs:33:5
+  --> $DIR/issue-29106.rs:23:25
    |
-32 |         y = Rc::new(Foo(&x));
-   |                          - borrow occurs here
-33 |     } //~ ERROR `x` does not live long enough
-   |     ^ `x` dropped here while still borrowed
+LL |         y = Rc::new(Foo(&x));
+   |                         ^^ borrowed value does not live long enough
+LL |     }
+   |     -
+   |     |
+   |     `x` dropped here while still borrowed
+   |     borrow might be used here, when `y` is dropped and runs the `Drop` code for type `std::rc::Rc`
    |
-   = note: values in a scope are dropped in the opposite order they are created
+   = note: values in a scope are dropped in the opposite order they are defined
 
-error: aborting due to previous error(s)
+error: aborting due to 2 previous errors
 
+For more information about this error, try `rustc --explain E0597`.

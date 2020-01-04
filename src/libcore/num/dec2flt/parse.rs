@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Validating and decomposing a decimal string of the form:
 //!
 //! `(digits | digits? '.'? digits?) (('e' | 'E') ('+' | '-')? digits)?`
@@ -20,8 +10,8 @@
 //! modules rely on to not panic (or overflow) in turn.
 //! To make matters worse, all that happens in a single pass over the input.
 //! So, be careful when modifying anything, and double-check with the other modules.
+use self::ParseResult::{Invalid, ShortcutToInf, ShortcutToZero, Valid};
 use super::num;
-use self::ParseResult::{Valid, ShortcutToInf, ShortcutToZero, Invalid};
 
 #[derive(Debug)]
 pub enum Sign {
@@ -40,7 +30,7 @@ pub struct Decimal<'a> {
 
 impl<'a> Decimal<'a> {
     pub fn new(integral: &'a [u8], fractional: &'a [u8], exp: i64) -> Decimal<'a> {
-        Decimal { integral: integral, fractional: fractional, exp: exp }
+        Decimal { integral, fractional, exp }
     }
 }
 
@@ -52,9 +42,9 @@ pub enum ParseResult<'a> {
     Invalid,
 }
 
-/// Check if the input string is a valid floating point number and if so, locate the integral
+/// Checks if the input string is a valid floating point number and if so, locate the integral
 /// part, the fractional part, and the exponent in it. Does not handle signs.
-pub fn parse_decimal(s: &str) -> ParseResult {
+pub fn parse_decimal(s: &str) -> ParseResult<'_> {
     if s.is_empty() {
         return Invalid;
     }
@@ -73,7 +63,8 @@ pub fn parse_decimal(s: &str) -> ParseResult {
         }
         Some(&b'.') => {
             let (fractional, s) = eat_digits(&s[1..]);
-            if integral.is_empty() && fractional.is_empty() && s.is_empty() {
+            if integral.is_empty() && fractional.is_empty() {
+                // We require at least a single digit before or after the point.
                 return Invalid;
             }
 
@@ -87,7 +78,7 @@ pub fn parse_decimal(s: &str) -> ParseResult {
     }
 }
 
-/// Carve off decimal digits up to the first non-digit character.
+/// Carves off decimal digits up to the first non-digit character.
 fn eat_digits(s: &[u8]) -> (&[u8], &[u8]) {
     let mut i = 0;
     while i < s.len() && b'0' <= s[i] && s[i] <= b'9' {

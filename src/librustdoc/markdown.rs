@@ -1,43 +1,29 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use std::default::Default;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io;
-use std::path::{PathBuf, Path};
+use std::path::PathBuf;
 
-use getopts;
+use errors;
+use rustc_feature::UnstableFeatures;
+use rustc_span::edition::Edition;
+use rustc_span::source_map::DUMMY_SP;
 use testing;
-use rustc::session::search_paths::SearchPaths;
-use rustc::session::config::Externs;
-use syntax::codemap::DUMMY_SP;
 
-use externalfiles::{ExternalHtml, LoadStringError, load_string};
-
-use html::render::reset_ids;
-use html::escape::Escape;
-use html::markdown;
-use html::markdown::{Markdown, MarkdownWithToc, find_testable_code, old_find_testable_code};
-use html::markdown::RenderType;
-use test::{TestOptions, Collector};
+use crate::config::{Options, RenderOptions};
+use crate::externalfiles::{load_string, LoadStringError};
+use crate::html::escape::Escape;
+use crate::html::markdown;
+use crate::html::markdown::{find_testable_code, ErrorCodes, IdMap, Markdown, MarkdownWithToc};
+use crate::test::{Collector, TestOptions};
 
 /// Separate any lines at the start of the file that begin with `# ` or `%`.
-fn extract_leading_metadata<'a>(s: &'a str) -> (Vec<&'a str>, &'a str) {
+fn extract_leading_metadata(s: &str) -> (Vec<&str>, &str) {
     let mut metadata = Vec::new();
     let mut count = 0;
 
     for line in s.lines() {
         if line.starts_with("# ") || line.starts_with("%") {
             // trim the whitespace after the symbol
-            metadata.push(line[1..].trim_left());
+            metadata.push(line[1..].trim_start());
             count += line.len() + 1;
         } else {
             return (metadata, &s[count..]);
@@ -48,57 +34,53 @@ fn extract_leading_metadata<'a>(s: &'a str) -> (Vec<&'a str>, &'a str) {
     (metadata, "")
 }
 
-/// Render `input` (e.g. "foo.md") into an HTML file in `output`
-/// (e.g. output = "bar" => "bar/foo.html").
-pub fn render(input: &str, mut output: PathBuf, matches: &getopts::Matches,
-              external_html: &ExternalHtml, include_toc: bool,
-              render_type: RenderType) -> isize {
-    let input_p = Path::new(input);
-    output.push(input_p.file_stem().unwrap());
+/// Render `input` (e.g., "foo.md") into an HTML file in `output`
+/// (e.g., output = "bar" => "bar/foo.html").
+pub fn render(
+    input: PathBuf,
+    options: RenderOptions,
+    diag: &errors::Handler,
+    edition: Edition,
+) -> i32 {
+    let mut output = options.output;
+    output.push(input.file_name().unwrap());
     output.set_extension("html");
 
     let mut css = String::new();
-    for name in &matches.opt_strs("markdown-css") {
+    for name in &options.markdown_css {
         let s = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\">\n", name);
         css.push_str(&s)
     }
 
-    let input_str = match load_string(input) {
+    let input_str = match load_string(&input, diag) {
         Ok(s) => s,
         Err(LoadStringError::ReadFail) => return 1,
         Err(LoadStringError::BadUtf8) => return 2,
     };
-    if let Some(playground) = matches.opt_str("markdown-playground-url").or(
-                              matches.opt_str("playground-url")) {
-        markdown::PLAYGROUND.with(|s| { *s.borrow_mut() = Some((None, playground)); });
-    }
+    let playground_url = options.markdown_playground_url.or(options.playground_url);
+    let playground = playground_url.map(|url| markdown::Playground { crate_name: None, url });
 
     let mut out = match File::create(&output) {
         Err(e) => {
-            let _ = writeln!(&mut io::stderr(),
-                             "rustdoc: {}: {}",
-                             output.display(), e);
+            diag.struct_err(&format!("{}: {}", output.display(), e)).emit();
             return 4;
         }
-        Ok(f) => f
+        Ok(f) => f,
     };
 
     let (metadata, text) = extract_leading_metadata(&input_str);
     if metadata.is_empty() {
-        let _ = writeln!(
-            &mut io::stderr(),
-            "rustdoc: invalid markdown file: no initial lines starting with `# ` or `%`"
-        );
+        diag.struct_err("invalid markdown file: no initial lines starting with `# ` or `%`").emit();
         return 5;
     }
     let title = metadata[0];
 
-    reset_ids(false);
-
-    let rendered = if include_toc {
-        format!("{}", MarkdownWithToc(text, render_type))
+    let mut ids = IdMap::new();
+    let error_codes = ErrorCodes::from(UnstableFeatures::from_environment().is_nightly_build());
+    let text = if !options.markdown_no_toc {
+        MarkdownWithToc(text, &mut ids, error_codes, edition, &playground).to_string()
     } else {
-        format!("{}", Markdown(text, render_type))
+        Markdown(text, &[], &mut ids, error_codes, edition, &playground).to_string()
     };
 
     let err = write!(
@@ -130,28 +112,24 @@ pub fn render(input: &str, mut output: PathBuf, matches: &getopts::Matches,
 </html>"#,
         title = Escape(title),
         css = css,
-        in_header = external_html.in_header,
-        before_content = external_html.before_content,
-        text = rendered,
-        after_content = external_html.after_content,
-        );
+        in_header = options.external_html.in_header,
+        before_content = options.external_html.before_content,
+        text = text,
+        after_content = options.external_html.after_content,
+    );
 
     match err {
         Err(e) => {
-            let _ = writeln!(&mut io::stderr(),
-                             "rustdoc: cannot write to `{}`: {}",
-                             output.display(), e);
+            diag.struct_err(&format!("cannot write to `{}`: {}", output.display(), e)).emit();
             6
         }
-        Ok(_) => 0
+        Ok(_) => 0,
     }
 }
 
-/// Run any tests/code examples in the markdown file `input`.
-pub fn test(input: &str, cfgs: Vec<String>, libs: SearchPaths, externs: Externs,
-            mut test_args: Vec<String>, maybe_sysroot: Option<PathBuf>,
-            render_type: RenderType, display_warnings: bool) -> isize {
-    let input_str = match load_string(input) {
+/// Runs any tests/code examples in the markdown file `input`.
+pub fn test(mut options: Options, diag: &errors::Handler) -> i32 {
+    let input_str = match load_string(&options.input, diag) {
         Ok(s) => s,
         Err(LoadStringError::ReadFail) => return 1,
         Err(LoadStringError::BadUtf8) => return 2,
@@ -159,14 +137,26 @@ pub fn test(input: &str, cfgs: Vec<String>, libs: SearchPaths, externs: Externs,
 
     let mut opts = TestOptions::default();
     opts.no_crate_inject = true;
-    let mut collector = Collector::new(input.to_string(), cfgs, libs, externs,
-                                       true, opts, maybe_sysroot, None,
-                                       Some(input.to_owned()),
-                                       render_type);
-    old_find_testable_code(&input_str, &mut collector, DUMMY_SP);
-    find_testable_code(&input_str, &mut collector, DUMMY_SP);
-    test_args.insert(0, "rustdoctest".to_string());
-    testing::test_main(&test_args, collector.tests,
-                       testing::Options::new().display_output(display_warnings));
+    opts.display_warnings = options.display_warnings;
+    let mut collector = Collector::new(
+        options.input.display().to_string(),
+        options.clone(),
+        true,
+        opts,
+        None,
+        Some(options.input),
+        options.enable_per_target_ignores,
+    );
+    collector.set_position(DUMMY_SP);
+    let codes = ErrorCodes::from(UnstableFeatures::from_environment().is_nightly_build());
+
+    find_testable_code(&input_str, &mut collector, codes, options.enable_per_target_ignores);
+
+    options.test_args.insert(0, "rustdoctest".to_string());
+    testing::test_main(
+        &options.test_args,
+        collector.tests,
+        Some(testing::Options::new().display_output(options.display_warnings)),
+    );
     0
 }

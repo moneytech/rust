@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   g++ \
   make \
   file \
+  wget \
   curl \
   ca-certificates \
   python2.7 \
@@ -17,30 +18,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   pkg-config
 
 WORKDIR /build/
-COPY dist-x86_64-musl/build-musl.sh /build/
-RUN sh /build/build-musl.sh && rm -rf /build
 
-RUN curl -OL https://github.com/Yelp/dumb-init/releases/download/v1.2.0/dumb-init_1.2.0_amd64.deb && \
-    dpkg -i dumb-init_*.deb && \
-    rm dumb-init_*.deb
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+COPY scripts/musl-toolchain.sh /build/
+# We need to mitigate rust-lang/rust#34978 when compiling musl itself as well
+RUN CFLAGS="-Wa,-mrelax-relocations=no -Wa,--compress-debug-sections=none -Wl,--compress-debug-sections=none" \
+    CXXFLAGS="-Wa,-mrelax-relocations=no -Wa,--compress-debug-sections=none -Wl,--compress-debug-sections=none" \
+    REPLACE_CC=1 bash musl-toolchain.sh x86_64 && rm -rf build
 
-RUN curl -o /usr/local/bin/sccache \
-      https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/2017-05-12-sccache-x86_64-unknown-linux-musl && \
-      chmod +x /usr/local/bin/sccache
+COPY scripts/sccache.sh /scripts/
+RUN sh /scripts/sccache.sh
+
+ENV HOSTS=x86_64-unknown-linux-musl
 
 ENV RUST_CONFIGURE_ARGS \
-      --target=x86_64-unknown-linux-musl \
-      --musl-root-x86_64=/musl-x86_64 \
-      --enable-extended
+      --musl-root-x86_64=/usr/local/x86_64-linux-musl \
+      --enable-extended \
+      --disable-docs \
+      --set target.x86_64-unknown-linux-musl.crt-static=false \
+      --build $HOSTS
 
 # Newer binutils broke things on some vms/distros (i.e., linking against
 # unknown relocs disabled by the following flag), so we need to go out of our
 # way to produce "super compatible" binaries.
 #
 # See: https://github.com/rust-lang/rust/issues/34978
-ENV CFLAGS_x86_64_unknown_linux_musl=-Wa,-mrelax-relocations=no
+# And: https://github.com/rust-lang/rust/issues/59411
+ENV CFLAGS_x86_64_unknown_linux_musl="-Wa,-mrelax-relocations=no -Wa,--compress-debug-sections=none \
+    -Wl,--compress-debug-sections=none"
 
-ENV SCRIPT \
-      python2.7 ../x.py test --target x86_64-unknown-linux-musl && \
-      python2.7 ../x.py dist --target x86_64-unknown-linux-musl
+# To run native tests replace `dist` below with `test`
+ENV SCRIPT python2.7 ../x.py dist --build $HOSTS

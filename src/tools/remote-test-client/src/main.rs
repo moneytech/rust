@@ -1,19 +1,11 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+//! This is a small client program intended to pair with `remote-test-server` in
+//! this repository. This client connects to the server over TCP and is used to
+//! push artifacts and run tests on the server instead of locally.
+//!
+//! Here is also where we bake in the support to spawn the QEMU emulator as
+//! well.
 
-/// This is a small client program intended to pair with `remote-test-server` in
-/// this repository. This client connects to the server over TCP and is used to
-/// push artifacts and run tests on the server instead of locally.
-///
-/// Here is also where we bake in the support to spawn the QEMU emulator as
-/// well.
+#![deny(warnings)]
 
 use std::env;
 use std::fs::{self, File};
@@ -25,39 +17,34 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-const REMOTE_ADDR_ENV: &'static str = "TEST_DEVICE_ADDR";
+const REMOTE_ADDR_ENV: &str = "TEST_DEVICE_ADDR";
 
 macro_rules! t {
-    ($e:expr) => (match $e {
-        Ok(e) => e,
-        Err(e) => panic!("{} failed with {}", stringify!($e), e),
-    })
+    ($e:expr) => {
+        match $e {
+            Ok(e) => e,
+            Err(e) => panic!("{} failed with {}", stringify!($e), e),
+        }
+    };
 }
 
 fn main() {
     let mut args = env::args().skip(1);
 
     match &args.next().unwrap()[..] {
-        "spawn-emulator" => {
-            spawn_emulator(&args.next().unwrap(),
-                           Path::new(&args.next().unwrap()),
-                           Path::new(&args.next().unwrap()),
-                           args.next().map(|s| s.into()))
-        }
-        "push" => {
-            push(Path::new(&args.next().unwrap()))
-        }
-        "run" => {
-            run(args.next().unwrap(), args.collect())
-        }
+        "spawn-emulator" => spawn_emulator(
+            &args.next().unwrap(),
+            Path::new(&args.next().unwrap()),
+            Path::new(&args.next().unwrap()),
+            args.next().map(|s| s.into()),
+        ),
+        "push" => push(Path::new(&args.next().unwrap())),
+        "run" => run(args.next().unwrap(), args.collect()),
         cmd => panic!("unknown command: {}", cmd),
     }
 }
 
-fn spawn_emulator(target: &str,
-                  server: &Path,
-                  tmpdir: &Path,
-                  rootfs: Option<PathBuf>) {
+fn spawn_emulator(target: &str, server: &Path, tmpdir: &Path, rootfs: Option<PathBuf>) {
     let device_address = env::var(REMOTE_ADDR_ENV).unwrap_or("127.0.0.1:12345".to_string());
 
     if env::var(REMOTE_ADDR_ENV).is_ok() {
@@ -66,7 +53,7 @@ fn spawn_emulator(target: &str,
         start_android_emulator(server);
     } else {
         let rootfs = rootfs.as_ref().expect("need rootfs on non-android");
-        start_qemu_emulator(rootfs, server, tmpdir);
+        start_qemu_emulator(target, rootfs, server, tmpdir);
     }
 
     // Wait for the emulator to come online
@@ -78,7 +65,7 @@ fn spawn_emulator(target: &str,
             if client.write_all(b"ping").is_ok() {
                 let mut b = [0; 4];
                 if client.read_exact(&mut b).is_ok() {
-                    break
+                    break;
                 }
             }
         }
@@ -88,39 +75,24 @@ fn spawn_emulator(target: &str,
 
 fn start_android_emulator(server: &Path) {
     println!("waiting for device to come online");
-    let status = Command::new("adb")
-                    .arg("wait-for-device")
-                    .status()
-                    .unwrap();
+    let status = Command::new("adb").arg("wait-for-device").status().unwrap();
     assert!(status.success());
 
     println!("pushing server");
-    let status = Command::new("adb")
-                    .arg("push")
-                    .arg(server)
-                    .arg("/data/tmp/testd")
-                    .status()
-                    .unwrap();
+    let status =
+        Command::new("adb").arg("push").arg(server).arg("/data/tmp/testd").status().unwrap();
     assert!(status.success());
 
     println!("forwarding tcp");
-    let status = Command::new("adb")
-                    .arg("forward")
-                    .arg("tcp:12345")
-                    .arg("tcp:12345")
-                    .status()
-                    .unwrap();
+    let status =
+        Command::new("adb").arg("forward").arg("tcp:12345").arg("tcp:12345").status().unwrap();
     assert!(status.success());
 
     println!("executing server");
-    Command::new("adb")
-                    .arg("shell")
-                    .arg("/data/tmp/testd")
-                    .spawn()
-                    .unwrap();
+    Command::new("adb").arg("shell").arg("/data/tmp/testd").spawn().unwrap();
 }
 
-fn start_qemu_emulator(rootfs: &Path, server: &Path, tmpdir: &Path) {
+fn start_qemu_emulator(target: &str, rootfs: &Path, server: &Path, tmpdir: &Path) {
     // Generate a new rootfs image now that we've updated the test server
     // executable. This is the equivalent of:
     //
@@ -129,32 +101,64 @@ fn start_qemu_emulator(rootfs: &Path, server: &Path, tmpdir: &Path) {
     let rootfs_img = tmpdir.join("rootfs.img");
     let mut cmd = Command::new("cpio");
     cmd.arg("--null")
-       .arg("-o")
-       .arg("--format=newc")
-       .stdin(Stdio::piped())
-       .stdout(Stdio::piped())
-       .current_dir(rootfs);
+        .arg("-o")
+        .arg("--format=newc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .current_dir(rootfs);
     let mut child = t!(cmd.spawn());
     let mut stdin = child.stdin.take().unwrap();
     let rootfs = rootfs.to_path_buf();
     thread::spawn(move || add_files(&mut stdin, &rootfs, &rootfs));
-    t!(io::copy(&mut child.stdout.take().unwrap(),
-                &mut t!(File::create(&rootfs_img))));
+    t!(io::copy(&mut child.stdout.take().unwrap(), &mut t!(File::create(&rootfs_img))));
     assert!(t!(child.wait()).success());
 
     // Start up the emulator, in the background
-    let mut cmd = Command::new("qemu-system-arm");
-    cmd.arg("-M").arg("vexpress-a15")
-       .arg("-m").arg("1024")
-       .arg("-kernel").arg("/tmp/zImage")
-       .arg("-initrd").arg(&rootfs_img)
-       .arg("-dtb").arg("/tmp/vexpress-v2p-ca15-tc1.dtb")
-       .arg("-append").arg("console=ttyAMA0 root=/dev/ram rdinit=/sbin/init init=/sbin/init")
-       .arg("-nographic")
-       .arg("-redir").arg("tcp:12345::12345");
-    t!(cmd.spawn());
+    match target {
+        "arm-unknown-linux-gnueabihf" => {
+            let mut cmd = Command::new("qemu-system-arm");
+            cmd.arg("-M")
+                .arg("vexpress-a15")
+                .arg("-m")
+                .arg("1024")
+                .arg("-kernel")
+                .arg("/tmp/zImage")
+                .arg("-initrd")
+                .arg(&rootfs_img)
+                .arg("-dtb")
+                .arg("/tmp/vexpress-v2p-ca15-tc1.dtb")
+                .arg("-append")
+                .arg("console=ttyAMA0 root=/dev/ram rdinit=/sbin/init init=/sbin/init")
+                .arg("-nographic")
+                .arg("-redir")
+                .arg("tcp:12345::12345");
+            t!(cmd.spawn());
+        }
+        "aarch64-unknown-linux-gnu" => {
+            let mut cmd = Command::new("qemu-system-aarch64");
+            cmd.arg("-machine")
+                .arg("virt")
+                .arg("-cpu")
+                .arg("cortex-a57")
+                .arg("-m")
+                .arg("1024")
+                .arg("-kernel")
+                .arg("/tmp/Image")
+                .arg("-initrd")
+                .arg(&rootfs_img)
+                .arg("-append")
+                .arg("console=ttyAMA0 root=/dev/ram rdinit=/sbin/init init=/sbin/init")
+                .arg("-nographic")
+                .arg("-netdev")
+                .arg("user,id=net0,hostfwd=tcp::12345-:12345")
+                .arg("-device")
+                .arg("virtio-net-device,netdev=net0,mac=00:00:00:00:00:00");
+            t!(cmd.spawn());
+        }
+        _ => panic!("cannot start emulator for: {}" < target),
+    }
 
-    fn add_files(w: &mut Write, root: &Path, cur: &Path) {
+    fn add_files(w: &mut dyn Write, root: &Path, cur: &Path) {
         for entry in t!(cur.read_dir()) {
             let entry = t!(entry);
             let path = entry.path();
@@ -203,9 +207,7 @@ fn run(files: String, args: Vec<String>) {
     // by the client.
     for (k, v) in env::vars() {
         match &k[..] {
-            "PATH" |
-            "LD_LIBRARY_PATH" |
-            "PWD" => continue,
+            "PATH" | "LD_LIBRARY_PATH" | "PWD" => continue,
             _ => {}
         }
         t!(client.write_all(k.as_bytes()));
@@ -238,10 +240,10 @@ fn run(files: String, args: Vec<String>) {
     let mut stderr = io::stderr();
     while !stdout_done || !stderr_done {
         t!(client.read_exact(&mut header));
-        let amt = ((header[1] as u64) << 24) |
-                  ((header[2] as u64) << 16) |
-                  ((header[3] as u64) <<  8) |
-                  ((header[4] as u64) <<  0);
+        let amt = ((header[1] as u64) << 24)
+            | ((header[2] as u64) << 16)
+            | ((header[3] as u64) << 8)
+            | ((header[4] as u64) << 0);
         if header[0] == 0 {
             if amt == 0 {
                 stdout_done = true;
@@ -262,10 +264,10 @@ fn run(files: String, args: Vec<String>) {
     // Finally, read out the exit status
     let mut status = [0; 5];
     t!(client.read_exact(&mut status));
-    let code = ((status[1] as i32) << 24) |
-               ((status[2] as i32) << 16) |
-               ((status[3] as i32) <<  8) |
-               ((status[4] as i32) <<  0);
+    let code = ((status[1] as i32) << 24)
+        | ((status[2] as i32) << 16)
+        | ((status[3] as i32) << 8)
+        | ((status[4] as i32) << 0);
     if status[0] == 0 {
         std::process::exit(code);
     } else {
@@ -274,16 +276,11 @@ fn run(files: String, args: Vec<String>) {
     }
 }
 
-fn send(path: &Path, dst: &mut Write) {
+fn send(path: &Path, dst: &mut dyn Write) {
     t!(dst.write_all(path.file_name().unwrap().to_str().unwrap().as_bytes()));
     t!(dst.write_all(&[0]));
     let mut file = t!(File::open(&path));
     let amt = t!(file.metadata()).len();
-    t!(dst.write_all(&[
-        (amt >> 24) as u8,
-        (amt >> 16) as u8,
-        (amt >>  8) as u8,
-        (amt >>  0) as u8,
-    ]));
+    t!(dst.write_all(&[(amt >> 24) as u8, (amt >> 16) as u8, (amt >> 8) as u8, (amt >> 0) as u8,]));
     t!(io::copy(&mut file, dst));
 }

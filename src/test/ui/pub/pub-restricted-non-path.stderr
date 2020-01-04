@@ -1,8 +1,8 @@
 error: expected identifier, found `.`
-  --> $DIR/pub-restricted-non-path.rs:13:6
+  --> $DIR/pub-restricted-non-path.rs:3:6
    |
-13 | pub (.) fn afn() {}
-   |      ^
+LL | pub (.) fn afn() {}
+   |      ^ expected identifier
 
-error: aborting due to previous error(s)
+error: aborting due to previous error
 

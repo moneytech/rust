@@ -1,30 +1,33 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use build::{BlockAnd, BlockAndExtension, Builder};
-use build::scope::BreakableScope;
-use hair::*;
+use crate::build::scope::BreakableTarget;
+use crate::build::{BlockAnd, BlockAndExtension, BlockFrame, Builder};
+use crate::hair::*;
+use rustc::middle::region;
 use rustc::mir::*;
 
-impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
-
-    pub fn stmt_expr(&mut self, mut block: BasicBlock, expr: Expr<'tcx>) -> BlockAnd<()> {
+impl<'a, 'tcx> Builder<'a, 'tcx> {
+    /// Builds a block of MIR statements to evaluate the HAIR `expr`.
+    /// If the original expression was an AST statement,
+    /// (e.g., `some().code(&here());`) then `opt_stmt_span` is the
+    /// span of that statement (including its semicolon, if any).
+    /// The scope is used if a statement temporary must be dropped.
+    pub fn stmt_expr(
+        &mut self,
+        mut block: BasicBlock,
+        expr: Expr<'tcx>,
+        statement_scope: Option<region::Scope>,
+    ) -> BlockAnd<()> {
         let this = self;
         let expr_span = expr.span;
         let source_info = this.source_info(expr.span);
         // Handle a number of expressions that don't need a destination at all. This
         // avoids needing a mountain of temporary `()` variables.
+        let expr2 = expr.clone();
         match expr.kind {
-            ExprKind::Scope { extent, value } => {
+            ExprKind::Scope { region_scope, lint_level, value } => {
                 let value = this.hir.mirror(value);
-                this.in_scope(extent, block, |this| this.stmt_expr(block, value))
+                this.in_scope((region_scope, source_info), lint_level, |this| {
+                    this.stmt_expr(block, value, statement_scope)
+                })
             }
             ExprKind::Assign { lhs, rhs } => {
                 let lhs = this.hir.mirror(lhs);
@@ -35,21 +38,23 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 // is better for borrowck interaction with overloaded
                 // operators like x[j] = x[i].
 
+                debug!("stmt_expr Assign block_context.push(SubExpr) : {:?}", expr2);
+                this.block_context.push(BlockFrame::SubExpr);
+
                 // Generate better code for things that don't need to be
                 // dropped.
                 if this.hir.needs_drop(lhs.ty) {
                     let rhs = unpack!(block = this.as_local_operand(block, rhs));
-                    let lhs = unpack!(block = this.as_lvalue(block, lhs));
-                    unpack!(block = this.build_drop_and_replace(
-                        block, lhs_span, lhs, rhs
-                    ));
-                    block.unit()
+                    let lhs = unpack!(block = this.as_place(block, lhs));
+                    unpack!(block = this.build_drop_and_replace(block, lhs_span, lhs, rhs));
                 } else {
                     let rhs = unpack!(block = this.as_local_rvalue(block, rhs));
-                    let lhs = unpack!(block = this.as_lvalue(block, lhs));
+                    let lhs = unpack!(block = this.as_place(block, lhs));
                     this.cfg.push_assign(block, source_info, &lhs, rhs);
-                    block.unit()
                 }
+
+                this.block_context.pop();
+                block.unit()
             }
             ExprKind::AssignOp { op, lhs, rhs } => {
                 // FIXME(#28160) there is an interesting semantics
@@ -63,87 +68,112 @@ impl<'a, 'gcx, 'tcx> Builder<'a, 'gcx, 'tcx> {
                 let lhs = this.hir.mirror(lhs);
                 let lhs_ty = lhs.ty;
 
+                debug!("stmt_expr AssignOp block_context.push(SubExpr) : {:?}", expr2);
+                this.block_context.push(BlockFrame::SubExpr);
+
                 // As above, RTL.
                 let rhs = unpack!(block = this.as_local_operand(block, rhs));
-                let lhs = unpack!(block = this.as_lvalue(block, lhs));
+                let lhs = unpack!(block = this.as_place(block, lhs));
 
                 // we don't have to drop prior contents or anything
                 // because AssignOp is only legal for Copy types
                 // (overloaded ops should be desugared into a call).
-                let result = unpack!(block = this.build_binary_op(block, op, expr_span, lhs_ty,
-                                                  Operand::Consume(lhs.clone()), rhs));
+                let result = unpack!(
+                    block = this.build_binary_op(
+                        block,
+                        op,
+                        expr_span,
+                        lhs_ty,
+                        Operand::Copy(lhs.clone()),
+                        rhs
+                    )
+                );
                 this.cfg.push_assign(block, source_info, &lhs, result);
 
+                this.block_context.pop();
                 block.unit()
             }
             ExprKind::Continue { label } => {
-                let BreakableScope { continue_block, extent, .. } =
-                    *this.find_breakable_scope(expr_span, label);
-                let continue_block = continue_block.expect(
-                    "Attempted to continue in non-continuable breakable block");
-                this.exit_scope(expr_span, extent, block, continue_block);
-                this.cfg.start_new_block().unit()
+                this.break_scope(block, None, BreakableTarget::Continue(label), source_info)
             }
             ExprKind::Break { label, value } => {
-                let (break_block, extent, destination) = {
-                    let BreakableScope {
-                        break_block,
-                        extent,
-                        ref break_destination,
-                        ..
-                    } = *this.find_breakable_scope(expr_span, label);
-                    (break_block, extent, break_destination.clone())
-                };
-                if let Some(value) = value {
-                    unpack!(block = this.into(&destination, block, value))
-                } else {
-                    this.cfg.push_assign_unit(block, source_info, &destination)
-                }
-                this.exit_scope(expr_span, extent, block, break_block);
-                this.cfg.start_new_block().unit()
+                this.break_scope(block, value, BreakableTarget::Break(label), source_info)
             }
             ExprKind::Return { value } => {
-                block = match value {
-                    Some(value) => {
-                        unpack!(this.into(&Lvalue::Local(RETURN_POINTER), block, value))
-                    }
-                    None => {
-                        this.cfg.push_assign_unit(block,
-                                                  source_info,
-                                                  &Lvalue::Local(RETURN_POINTER));
-                        block
-                    }
-                };
-                let extent = this.extent_of_return_scope();
-                let return_block = this.return_block();
-                this.exit_scope(expr_span, extent, block, return_block);
-                this.cfg.start_new_block().unit()
+                this.break_scope(block, value, BreakableTarget::Return, source_info)
             }
             ExprKind::InlineAsm { asm, outputs, inputs } => {
-                let outputs = outputs.into_iter().map(|output| {
-                    unpack!(block = this.as_lvalue(block, output))
-                }).collect();
-                let inputs = inputs.into_iter().map(|input| {
-                    unpack!(block = this.as_local_operand(block, input))
-                }).collect();
-                this.cfg.push(block, Statement {
-                    source_info: source_info,
-                    kind: StatementKind::InlineAsm {
-                        asm: box asm.clone(),
-                        outputs: outputs,
-                        inputs: inputs
+                debug!("stmt_expr InlineAsm block_context.push(SubExpr) : {:?}", expr2);
+                this.block_context.push(BlockFrame::SubExpr);
+                let outputs = outputs
+                    .into_iter()
+                    .map(|output| unpack!(block = this.as_place(block, output)))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| {
+                        (input.span(), unpack!(block = this.as_local_operand(block, input)))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                this.cfg.push(
+                    block,
+                    Statement {
+                        source_info,
+                        kind: StatementKind::InlineAsm(box InlineAsm {
+                            asm: asm.clone(),
+                            outputs,
+                            inputs,
+                        }),
                     },
-                });
+                );
+                this.block_context.pop();
                 block.unit()
             }
             _ => {
-                let expr_ty = expr.ty;
-                let temp = this.temp(expr.ty.clone(), expr_span);
-                unpack!(block = this.into(&temp, block, expr));
-                unpack!(block = this.build_drop(block, expr_span, temp, expr_ty));
+                assert!(
+                    statement_scope.is_some(),
+                    "Should not be calling `stmt_expr` on a general expression \
+                     without a statement scope",
+                );
+
+                // Issue #54382: When creating temp for the value of
+                // expression like:
+                //
+                // `{ side_effects(); { let l = stuff(); the_value } }`
+                //
+                // it is usually better to focus on `the_value` rather
+                // than the entirety of block(s) surrounding it.
+                let adjusted_span = (|| {
+                    if let ExprKind::Block { body } = expr.kind {
+                        if let Some(tail_expr) = &body.expr {
+                            let mut expr = tail_expr;
+                            while let rustc::hir::ExprKind::Block(subblock, _label) = &expr.kind {
+                                if let Some(subtail_expr) = &subblock.expr {
+                                    expr = subtail_expr
+                                } else {
+                                    break;
+                                }
+                            }
+                            this.block_context
+                                .push(BlockFrame::TailExpr { tail_result_is_ignored: true });
+                            return Some(expr.span);
+                        }
+                    }
+                    None
+                })();
+
+                let temp =
+                    unpack!(block = this.as_temp(block, statement_scope, expr, Mutability::Not));
+
+                if let Some(span) = adjusted_span {
+                    this.local_decls[temp].source_info.span = span;
+                    this.block_context.pop();
+                }
+
                 block.unit()
             }
         }
     }
-
 }

@@ -3,18 +3,19 @@ authors = ["The Rust Project Developers"]
 name = "rustc_llvm"
 version = "0.0.0"
 build = "build.rs"
+edition = "2018"
 
 [lib]
 name = "rustc_llvm"
 path = "lib.rs"
-crate-type = ["dylib"]
 
 [features]
 static-libstdcpp = []
+emscripten = []
 
 [dependencies]
-rustc_bitflags = { path = "../librustc_bitflags" }
+libc = "0.2"
 
 [build-dependencies]
 build_helper = { path = "../build_helper" }
-gcc = "0.3.50"
+cc = "1.0.1"

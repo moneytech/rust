@@ -1,19 +1,9 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use fmt;
-use io::{self, Error, ErrorKind};
-use net::{ToSocketAddrs, SocketAddr, Ipv4Addr, Ipv6Addr};
-use sys_common::net as net_imp;
-use sys_common::{AsInner, FromInner, IntoInner};
-use time::Duration;
+use crate::fmt;
+use crate::io::{self, Error, ErrorKind};
+use crate::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use crate::sys_common::net as net_imp;
+use crate::sys_common::{AsInner, FromInner, IntoInner};
+use crate::time::Duration;
 
 /// A UDP socket.
 ///
@@ -44,21 +34,22 @@ use time::Duration;
 /// ```no_run
 /// use std::net::UdpSocket;
 ///
-/// # fn foo() -> std::io::Result<()> {
-/// {
-///     let mut socket = UdpSocket::bind("127.0.0.1:34254")?;
+/// fn main() -> std::io::Result<()> {
+///     {
+///         let mut socket = UdpSocket::bind("127.0.0.1:34254")?;
 ///
-///     // read from the socket
-///     let mut buf = [0; 10];
-///     let (amt, src) = socket.recv_from(&mut buf)?;
+///         // Receives a single datagram message on the socket. If `buf` is too small to hold
+///         // the message, it will be cut off.
+///         let mut buf = [0; 10];
+///         let (amt, src) = socket.recv_from(&mut buf)?;
 ///
-///     // send a reply to the socket we received data from
-///     let buf = &mut buf[..amt];
-///     buf.reverse();
-///     socket.send_to(buf, &src)?;
-///     # Ok(())
-/// } // the socket is closed here
-/// # }
+///         // Redeclare `buf` as slice of the received data and send reverse data back to origin.
+///         let buf = &mut buf[..amt];
+///         buf.reverse();
+///         socket.send_to(buf, &src)?;
+///     } // the socket is closed here
+///     Ok(())
+/// }
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct UdpSocket(net_imp::UdpSocket);
@@ -69,22 +60,46 @@ impl UdpSocket {
     /// The address type can be any implementor of [`ToSocketAddrs`] trait. See
     /// its documentation for concrete examples.
     ///
+    /// If `addr` yields multiple addresses, `bind` will be attempted with
+    /// each of the addresses until one succeeds and returns the socket. If none
+    /// of the addresses succeed in creating a socket, the error returned from
+    /// the last attempt (the last address) is returned.
+    ///
     /// [`ToSocketAddrs`]: ../../std/net/trait.ToSocketAddrs.html
     ///
     /// # Examples
     ///
+    /// Creates a UDP socket bound to `127.0.0.1:3400`:
+    ///
     /// ```no_run
     /// use std::net::UdpSocket;
     ///
-    /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
+    /// let socket = UdpSocket::bind("127.0.0.1:3400").expect("couldn't bind to address");
+    /// ```
+    ///
+    /// Creates a UDP socket bound to `127.0.0.1:3400`. If the socket cannot be
+    /// bound to that address, create a UDP socket bound to `127.0.0.1:3401`:
+    ///
+    /// ```no_run
+    /// use std::net::{SocketAddr, UdpSocket};
+    ///
+    /// let addrs = [
+    ///     SocketAddr::from(([127, 0, 0, 1], 3400)),
+    ///     SocketAddr::from(([127, 0, 0, 1], 3401)),
+    /// ];
+    /// let socket = UdpSocket::bind(&addrs[..]).expect("couldn't bind to address");
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
         super::each_addr(addr, net_imp::UdpSocket::bind).map(UdpSocket)
     }
 
-    /// Receives data from the socket. On success, returns the number of bytes
-    /// read and the address from whence the data came.
+    /// Receives a single datagram message on the socket. On success, returns the number
+    /// of bytes read and the origin.
+    ///
+    /// The function must be called with valid byte array `buf` of sufficient size to
+    /// hold the message bytes. If a message is too long to fit in the supplied buffer,
+    /// excess bytes may be discarded.
     ///
     /// # Examples
     ///
@@ -95,19 +110,25 @@ impl UdpSocket {
     /// let mut buf = [0; 10];
     /// let (number_of_bytes, src_addr) = socket.recv_from(&mut buf)
     ///                                         .expect("Didn't receive data");
+    /// let filled_buf = &mut buf[..number_of_bytes];
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         self.0.recv_from(buf)
     }
 
-    /// Receives data from the socket, without removing it from the queue.
+    /// Receives a single datagram message on the socket, without removing it from the
+    /// queue. On success, returns the number of bytes read and the origin.
+    ///
+    /// The function must be called with valid byte array `buf` of sufficient size to
+    /// hold the message bytes. If a message is too long to fit in the supplied buffer,
+    /// excess bytes may be discarded.
     ///
     /// Successive calls return the same data. This is accomplished by passing
     /// `MSG_PEEK` as a flag to the underlying `recvfrom` system call.
     ///
-    /// On success, returns the number of bytes peeked and the address from
-    /// whence the data came.
+    /// Do not use this function to implement busy waiting, instead use `libc::poll` to
+    /// synchronize IO events on one or more sockets.
     ///
     /// # Examples
     ///
@@ -118,6 +139,7 @@ impl UdpSocket {
     /// let mut buf = [0; 10];
     /// let (number_of_bytes, src_addr) = socket.peek_from(&mut buf)
     ///                                         .expect("Didn't receive data");
+    /// let filled_buf = &mut buf[..number_of_bytes];
     /// ```
     #[stable(feature = "peek", since = "1.18.0")]
     pub fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
@@ -130,10 +152,13 @@ impl UdpSocket {
     /// Address type can be any implementor of [`ToSocketAddrs`] trait. See its
     /// documentation for concrete examples.
     ///
+    /// It is possible for `addr` to yield multiple addresses, but `send_to`
+    /// will only send data to the first address yielded by `addr`.
+    ///
     /// This will return an error when the IP version of the local socket
     /// does not match that returned from [`ToSocketAddrs`].
     ///
-    /// See https://github.com/rust-lang/rust/issues/34202 for more details.
+    /// See issue #34202 for more details.
     ///
     /// [`ToSocketAddrs`]: ../../std/net/trait.ToSocketAddrs.html
     ///
@@ -146,13 +171,40 @@ impl UdpSocket {
     /// socket.send_to(&[0; 10], "127.0.0.1:4242").expect("couldn't send data");
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A)
-                                     -> io::Result<usize> {
+    pub fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         match addr.to_socket_addrs()?.next() {
             Some(addr) => self.0.send_to(buf, &addr),
-            None => Err(Error::new(ErrorKind::InvalidInput,
-                                   "no addresses to send data to")),
+            None => Err(Error::new(ErrorKind::InvalidInput, "no addresses to send data to")),
         }
+    }
+
+    /// Returns the socket address of the remote peer this socket was connected to.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+    ///
+    /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
+    /// socket.connect("192.168.0.1:41203").expect("couldn't connect to address");
+    /// assert_eq!(socket.peer_addr().unwrap(),
+    ///            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 0, 1), 41203)));
+    /// ```
+    ///
+    /// If the socket isn't connected, it will return a [`NotConnected`] error.
+    ///
+    /// [`NotConnected`]: ../../std/io/enum.ErrorKind.html#variant.NotConnected
+    ///
+    /// ```no_run
+    /// use std::net::UdpSocket;
+    ///
+    /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
+    /// assert_eq!(socket.peer_addr().unwrap_err().kind(),
+    ///            std::io::ErrorKind::NotConnected);
+    /// ```
+    #[stable(feature = "udp_peer_addr", since = "1.40.0")]
+    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.0.peer_addr()
     }
 
     /// Returns the socket address that this socket was created from.
@@ -193,16 +245,17 @@ impl UdpSocket {
     /// Sets the read timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then [`read`] calls will block
-    /// indefinitely. It is an error to pass the zero [`Duration`] to this
-    /// method.
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
     ///
-    /// # Note
+    /// # Platform-specific behavior
     ///
     /// Platforms may return a different error code whenever a read times out as
     /// a result of setting this option. For example Unix typically returns an
     /// error of the kind [`WouldBlock`], but Windows may return [`TimedOut`].
     ///
     /// [`None`]: ../../std/option/enum.Option.html#variant.None
+    /// [`Err`]: ../../std/result/enum.Result.html#variant.Err
     /// [`read`]: ../../std/io/trait.Read.html#tymethod.read
     /// [`Duration`]: ../../std/time/struct.Duration.html
     /// [`WouldBlock`]: ../../std/io/enum.ErrorKind.html#variant.WouldBlock
@@ -216,6 +269,20 @@ impl UdpSocket {
     /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
     /// socket.set_read_timeout(None).expect("set_read_timeout call failed");
     /// ```
+    ///
+    /// An [`Err`] is returned if the zero [`Duration`] is passed to this
+    /// method:
+    ///
+    /// ```no_run
+    /// use std::io;
+    /// use std::net::UdpSocket;
+    /// use std::time::Duration;
+    ///
+    /// let socket = UdpSocket::bind("127.0.0.1:34254").unwrap();
+    /// let result = socket.set_read_timeout(Some(Duration::new(0, 0)));
+    /// let err = result.unwrap_err();
+    /// assert_eq!(err.kind(), io::ErrorKind::InvalidInput)
+    /// ```
     #[stable(feature = "socket_timeout", since = "1.4.0")]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
         self.0.set_read_timeout(dur)
@@ -224,16 +291,17 @@ impl UdpSocket {
     /// Sets the write timeout to the timeout specified.
     ///
     /// If the value specified is [`None`], then [`write`] calls will block
-    /// indefinitely. It is an error to pass the zero [`Duration`] to this
-    /// method.
+    /// indefinitely. An [`Err`] is returned if the zero [`Duration`] is
+    /// passed to this method.
     ///
-    /// # Note
+    /// # Platform-specific behavior
     ///
     /// Platforms may return a different error code whenever a write times out
     /// as a result of setting this option. For example Unix typically returns
     /// an error of the kind [`WouldBlock`], but Windows may return [`TimedOut`].
     ///
     /// [`None`]: ../../std/option/enum.Option.html#variant.None
+    /// [`Err`]: ../../std/result/enum.Result.html#variant.Err
     /// [`write`]: ../../std/io/trait.Write.html#tymethod.write
     /// [`Duration`]: ../../std/time/struct.Duration.html
     /// [`WouldBlock`]: ../../std/io/enum.ErrorKind.html#variant.WouldBlock
@@ -246,6 +314,20 @@ impl UdpSocket {
     ///
     /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
     /// socket.set_write_timeout(None).expect("set_write_timeout call failed");
+    /// ```
+    ///
+    /// An [`Err`] is returned if the zero [`Duration`] is passed to this
+    /// method:
+    ///
+    /// ```no_run
+    /// use std::io;
+    /// use std::net::UdpSocket;
+    /// use std::time::Duration;
+    ///
+    /// let socket = UdpSocket::bind("127.0.0.1:34254").unwrap();
+    /// let result = socket.set_write_timeout(Some(Duration::new(0, 0)));
+    /// let err = result.unwrap_err();
+    /// assert_eq!(err.kind(), io::ErrorKind::InvalidInput)
     /// ```
     #[stable(feature = "socket_timeout", since = "1.4.0")]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
@@ -336,7 +418,7 @@ impl UdpSocket {
     /// Sets the value of the `IP_MULTICAST_LOOP` option for this socket.
     ///
     /// If enabled, multicast packets will be looped back to the local socket.
-    /// Note that this may not have any affect on IPv6 sockets.
+    /// Note that this may not have any effect on IPv6 sockets.
     ///
     /// # Examples
     ///
@@ -378,7 +460,7 @@ impl UdpSocket {
     /// this socket. The default value is 1 which means that multicast packets
     /// don't leave the local network unless explicitly requested.
     ///
-    /// Note that this may not have any affect on IPv6 sockets.
+    /// Note that this may not have any effect on IPv6 sockets.
     ///
     /// # Examples
     ///
@@ -535,7 +617,7 @@ impl UdpSocket {
         self.0.leave_multicast_v6(multiaddr, interface)
     }
 
-    /// Get the value of the `SO_ERROR` option on this socket.
+    /// Gets the value of the `SO_ERROR` option on this socket.
     ///
     /// This will retrieve the stored error in the underlying socket, clearing
     /// the field in the process. This can be useful for checking errors between
@@ -562,14 +644,30 @@ impl UdpSocket {
     /// `recv` syscalls to be used to send data and also applies filters to only
     /// receive data from the specified address.
     ///
+    /// If `addr` yields multiple addresses, `connect` will be attempted with
+    /// each of the addresses until the underlying OS function returns no
+    /// error. Note that usually, a successful `connect` call does not specify
+    /// that there is a remote server listening on the port, rather, such an
+    /// error would only be detected after the first send. If the OS returns an
+    /// error for each of the specified addresses, the error returned from the
+    /// last connection attempt (the last address) is returned.
+    ///
     /// # Examples
+    ///
+    /// Creates a UDP socket bound to `127.0.0.1:3400` and connect the socket to
+    /// `127.0.0.1:8080`:
     ///
     /// ```no_run
     /// use std::net::UdpSocket;
     ///
-    /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
+    /// let socket = UdpSocket::bind("127.0.0.1:3400").expect("couldn't bind to address");
     /// socket.connect("127.0.0.1:8080").expect("connect function failed");
     /// ```
+    ///
+    /// Unlike in the TCP case, passing an array of addresses to the `connect`
+    /// function of a UDP socket is not a useful thing to do: The OS will be
+    /// unable to determine whether something is listening on the remote
+    /// address without the application sending data.
     #[stable(feature = "net2_mutators", since = "1.9.0")]
     pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> io::Result<()> {
         super::each_addr(addr, |addr| self.0.connect(addr))
@@ -596,8 +694,12 @@ impl UdpSocket {
         self.0.send(buf)
     }
 
-    /// Receives data on the socket from the remote address to which it is
-    /// connected.
+    /// Receives a single datagram message on the socket from the remote address to
+    /// which it is connected. On success, returns the number of bytes read.
+    ///
+    /// The function must be called with valid byte array `buf` of sufficient size to
+    /// hold the message bytes. If a message is too long to fit in the supplied buffer,
+    /// excess bytes may be discarded.
     ///
     /// The [`connect`] method will connect this socket to a remote address. This
     /// method will fail if the socket is not connected.
@@ -613,7 +715,7 @@ impl UdpSocket {
     /// socket.connect("127.0.0.1:8080").expect("connect function failed");
     /// let mut buf = [0; 10];
     /// match socket.recv(&mut buf) {
-    ///     Ok(received) => println!("received {} bytes", received),
+    ///     Ok(received) => println!("received {} bytes {:?}", received, &buf[..received]),
     ///     Err(e) => println!("recv function failed: {:?}", e),
     /// }
     /// ```
@@ -622,12 +724,24 @@ impl UdpSocket {
         self.0.recv(buf)
     }
 
-    /// Receives data on the socket from the remote adress to which it is
-    /// connected, without removing that data from the queue. On success,
-    /// returns the number of bytes peeked.
+    /// Receives single datagram on the socket from the remote address to which it is
+    /// connected, without removing the message from input queue. On success, returns
+    /// the number of bytes peeked.
+    ///
+    /// The function must be called with valid byte array `buf` of sufficient size to
+    /// hold the message bytes. If a message is too long to fit in the supplied buffer,
+    /// excess bytes may be discarded.
     ///
     /// Successive calls return the same data. This is accomplished by passing
     /// `MSG_PEEK` as a flag to the underlying `recv` system call.
+    ///
+    /// Do not use this function to implement busy waiting, instead use `libc::poll` to
+    /// synchronize IO events on one or more sockets.
+    ///
+    /// The [`connect`] method will connect this socket to a remote address. This
+    /// method will fail if the socket is not connected.
+    ///
+    /// [`connect`]: #method.connect
     ///
     /// # Errors
     ///
@@ -654,16 +768,45 @@ impl UdpSocket {
 
     /// Moves this UDP socket into or out of nonblocking mode.
     ///
-    /// On Unix this corresponds to calling fcntl, and on Windows this
-    /// corresponds to calling ioctlsocket.
+    /// This will result in `recv`, `recv_from`, `send`, and `send_to`
+    /// operations becoming nonblocking, i.e., immediately returning from their
+    /// calls. If the IO operation is successful, `Ok` is returned and no
+    /// further action is required. If the IO operation could not be completed
+    /// and needs to be retried, an error with kind
+    /// [`io::ErrorKind::WouldBlock`] is returned.
+    ///
+    /// On Unix platforms, calling this method corresponds to calling `fcntl`
+    /// `FIONBIO`. On Windows calling this method corresponds to calling
+    /// `ioctlsocket` `FIONBIO`.
+    ///
+    /// [`io::ErrorKind::WouldBlock`]: ../io/enum.ErrorKind.html#variant.WouldBlock
     ///
     /// # Examples
     ///
+    /// Creates a UDP socket bound to `127.0.0.1:7878` and read bytes in
+    /// nonblocking mode:
+    ///
     /// ```no_run
+    /// use std::io;
     /// use std::net::UdpSocket;
     ///
-    /// let socket = UdpSocket::bind("127.0.0.1:34254").expect("couldn't bind to address");
-    /// socket.set_nonblocking(true).expect("set_nonblocking call failed");
+    /// let socket = UdpSocket::bind("127.0.0.1:7878").unwrap();
+    /// socket.set_nonblocking(true).unwrap();
+    ///
+    /// # fn wait_for_fd() { unimplemented!() }
+    /// let mut buf = [0; 10];
+    /// let (num_bytes_read, _) = loop {
+    ///     match socket.recv_from(&mut buf) {
+    ///         Ok(n) => break n,
+    ///         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+    ///             // wait until network socket is ready, typically implemented
+    ///             // via platform-specific APIs such as epoll or IOCP
+    ///             wait_for_fd();
+    ///         }
+    ///         Err(e) => panic!("encountered IO error: {}", e),
+    ///     }
+    /// };
+    /// println!("bytes: {:?}", &buf[..num_bytes_read]);
     /// ```
     #[stable(feature = "net2_mutators", since = "1.9.0")]
     pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
@@ -672,35 +815,41 @@ impl UdpSocket {
 }
 
 impl AsInner<net_imp::UdpSocket> for UdpSocket {
-    fn as_inner(&self) -> &net_imp::UdpSocket { &self.0 }
+    fn as_inner(&self) -> &net_imp::UdpSocket {
+        &self.0
+    }
 }
 
 impl FromInner<net_imp::UdpSocket> for UdpSocket {
-    fn from_inner(inner: net_imp::UdpSocket) -> UdpSocket { UdpSocket(inner) }
+    fn from_inner(inner: net_imp::UdpSocket) -> UdpSocket {
+        UdpSocket(inner)
+    }
 }
 
 impl IntoInner<net_imp::UdpSocket> for UdpSocket {
-    fn into_inner(self) -> net_imp::UdpSocket { self.0 }
+    fn into_inner(self) -> net_imp::UdpSocket {
+        self.0
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for UdpSocket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-#[cfg(all(test, not(target_os = "emscripten")))]
+#[cfg(all(test, not(any(target_os = "cloudabi", target_os = "emscripten", target_env = "sgx"))))]
 mod tests {
-    use io::ErrorKind;
-    use net::*;
-    use net::test::{next_test_ip4, next_test_ip6};
-    use sync::mpsc::channel;
-    use sys_common::AsInner;
-    use time::{Instant, Duration};
-    use thread;
+    use crate::io::ErrorKind;
+    use crate::net::test::{next_test_ip4, next_test_ip6};
+    use crate::net::*;
+    use crate::sync::mpsc::channel;
+    use crate::sys_common::AsInner;
+    use crate::thread;
+    use crate::time::{Duration, Instant};
 
-    fn each_ip(f: &mut FnMut(SocketAddr, SocketAddr)) {
+    fn each_ip(f: &mut dyn FnMut(SocketAddr, SocketAddr)) {
         f(next_test_ip4(), next_test_ip4());
         f(next_test_ip6(), next_test_ip6());
     }
@@ -711,16 +860,14 @@ mod tests {
                 Ok(t) => t,
                 Err(e) => panic!("received error for `{}`: {}", stringify!($e), e),
             }
-        }
+        };
     }
 
     #[test]
     fn bind_error() {
         match UdpSocket::bind("1.1.1.1:9999") {
             Ok(..) => panic!(),
-            Err(e) => {
-                assert_eq!(e.kind(), ErrorKind::AddrNotAvailable)
-            }
+            Err(e) => assert_eq!(e.kind(), ErrorKind::AddrNotAvailable),
         }
     }
 
@@ -730,7 +877,7 @@ mod tests {
             let (tx1, rx1) = channel();
             let (tx2, rx2) = channel();
 
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 let client = t!(UdpSocket::bind(&client_ip));
                 rx1.recv().unwrap();
                 t!(client.send_to(&[99], &server_ip));
@@ -749,10 +896,20 @@ mod tests {
     }
 
     #[test]
-    fn socket_name_ip4() {
+    fn socket_name() {
         each_ip(&mut |addr, _| {
             let server = t!(UdpSocket::bind(&addr));
             assert_eq!(addr, t!(server.local_addr()));
+        })
+    }
+
+    #[test]
+    fn socket_peer() {
+        each_ip(&mut |addr1, addr2| {
+            let server = t!(UdpSocket::bind(&addr1));
+            assert_eq!(server.peer_addr().unwrap_err().kind(), ErrorKind::NotConnected);
+            t!(server.connect(&addr2));
+            assert_eq!(addr2, t!(server.peer_addr()));
         })
     }
 
@@ -762,7 +919,7 @@ mod tests {
             let sock1 = t!(UdpSocket::bind(&addr1));
             let sock2 = t!(UdpSocket::bind(&addr2));
 
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 let mut buf = [0, 0];
                 assert_eq!(sock2.recv_from(&mut buf).unwrap(), (1, addr1));
                 assert_eq!(buf[0], 1);
@@ -773,7 +930,7 @@ mod tests {
 
             let (tx1, rx1) = channel();
             let (tx2, rx2) = channel();
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 rx1.recv().unwrap();
                 t!(sock3.send_to(&[1], &addr2));
                 tx2.send(()).unwrap();
@@ -793,7 +950,7 @@ mod tests {
             let (tx1, rx) = channel();
             let tx2 = tx1.clone();
 
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 t!(sock2.send_to(&[1], &addr1));
                 rx.recv().unwrap();
                 t!(sock2.send_to(&[2], &addr1));
@@ -803,7 +960,7 @@ mod tests {
             let sock3 = t!(sock1.try_clone());
 
             let (done, rx) = channel();
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 let mut buf = [0, 0];
                 t!(sock3.recv_from(&mut buf));
                 tx2.send(()).unwrap();
@@ -826,7 +983,7 @@ mod tests {
             let (tx, rx) = channel();
             let (serv_tx, serv_rx) = channel();
 
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 let mut buf = [0, 1];
                 rx.recv().unwrap();
                 t!(sock2.recv_from(&mut buf));
@@ -837,15 +994,19 @@ mod tests {
 
             let (done, rx) = channel();
             let tx2 = tx.clone();
-            let _t = thread::spawn(move|| {
+            let _t = thread::spawn(move || {
                 match sock3.send_to(&[1], &addr2) {
-                    Ok(..) => { let _ = tx2.send(()); }
+                    Ok(..) => {
+                        let _ = tx2.send(());
+                    }
                     Err(..) => {}
                 }
                 done.send(()).unwrap();
             });
             match sock1.send_to(&[2], &addr2) {
-                Ok(..) => { let _ = tx.send(()); }
+                Ok(..) => {
+                    let _ = tx.send(());
+                }
                 Err(..) => {}
             }
             drop(tx);
@@ -857,19 +1018,20 @@ mod tests {
 
     #[test]
     fn debug() {
-        let name = if cfg!(windows) {"socket"} else {"fd"};
+        let name = if cfg!(windows) { "socket" } else { "fd" };
         let socket_addr = next_test_ip4();
 
         let udpsock = t!(UdpSocket::bind(&socket_addr));
         let udpsock_inner = udpsock.0.socket().as_inner();
-        let compare = format!("UdpSocket {{ addr: {:?}, {}: {:?} }}",
-                              socket_addr, name, udpsock_inner);
+        let compare =
+            format!("UdpSocket {{ addr: {:?}, {}: {:?} }}", socket_addr, name, udpsock_inner);
         assert_eq!(format!("{:?}", udpsock), compare);
     }
 
-    // FIXME: re-enabled bitrig/openbsd/netbsd tests once their socket timeout code
+    // FIXME: re-enabled openbsd/netbsd tests once their socket timeout code
     //        no longer has rounding errors.
-    #[cfg_attr(any(target_os = "bitrig", target_os = "netbsd", target_os = "openbsd"), ignore)]
+    // VxWorks ignores SO_SNDTIMEO.
+    #[cfg_attr(any(target_os = "netbsd", target_os = "openbsd", target_os = "vxworks"), ignore)]
     #[test]
     fn timeouts() {
         let addr = next_test_ip4();
@@ -904,8 +1066,17 @@ mod tests {
         let mut buf = [0; 10];
 
         let start = Instant::now();
-        let kind = stream.recv_from(&mut buf).err().expect("expected error").kind();
-        assert!(kind == ErrorKind::WouldBlock || kind == ErrorKind::TimedOut);
+        loop {
+            let kind = stream.recv_from(&mut buf).err().expect("expected error").kind();
+            if kind != ErrorKind::Interrupted {
+                assert!(
+                    kind == ErrorKind::WouldBlock || kind == ErrorKind::TimedOut,
+                    "unexpected_error: {:?}",
+                    kind
+                );
+                break;
+            }
+        }
         assert!(start.elapsed() > Duration::from_millis(400));
     }
 
@@ -923,9 +1094,35 @@ mod tests {
         assert_eq!(b"hello world", &buf[..]);
 
         let start = Instant::now();
-        let kind = stream.recv_from(&mut buf).err().expect("expected error").kind();
-        assert!(kind == ErrorKind::WouldBlock || kind == ErrorKind::TimedOut);
+        loop {
+            let kind = stream.recv_from(&mut buf).err().expect("expected error").kind();
+            if kind != ErrorKind::Interrupted {
+                assert!(
+                    kind == ErrorKind::WouldBlock || kind == ErrorKind::TimedOut,
+                    "unexpected_error: {:?}",
+                    kind
+                );
+                break;
+            }
+        }
         assert!(start.elapsed() > Duration::from_millis(400));
+    }
+
+    // Ensure the `set_read_timeout` and `set_write_timeout` calls return errors
+    // when passed zero Durations
+    #[test]
+    fn test_timeout_zero_duration() {
+        let addr = next_test_ip4();
+
+        let socket = t!(UdpSocket::bind(&addr));
+
+        let result = socket.set_write_timeout(Some(Duration::new(0, 0)));
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+
+        let result = socket.set_read_timeout(Some(Duration::new(0, 0)));
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
     }
 
     #[test]

@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! OS-based thread local storage
 //!
 //! This module provides an implementation of OS-based thread local storage,
@@ -33,7 +23,7 @@
 //! Using a dynamically allocated TLS key. Note that this key can be shared
 //! among many threads via an `Arc`.
 //!
-//! ```rust,ignore
+//! ```ignore (cannot-doctest-private-modules)
 //! let key = Key::new(None);
 //! assert!(key.get().is_null());
 //! key.set(1 as *mut u8);
@@ -45,7 +35,7 @@
 //! Sometimes a statically allocated key is either required or easier to work
 //! with, however.
 //!
-//! ```rust,ignore
+//! ```ignore (cannot-doctest-private-modules)
 //! static KEY: StaticKey = INIT;
 //!
 //! unsafe {
@@ -55,13 +45,13 @@
 //! ```
 
 #![allow(non_camel_case_types)]
-#![unstable(feature = "thread_local_internals", issue = "0")]
+#![unstable(feature = "thread_local_internals", issue = "none")]
 #![allow(dead_code)] // sys isn't exported yet
 
-use sync::atomic::{self, AtomicUsize, Ordering};
-
-use sys::thread_local as imp;
-use sys_common::mutex::Mutex;
+use crate::ptr;
+use crate::sync::atomic::{self, AtomicUsize, Ordering};
+use crate::sys::thread_local as imp;
+use crate::sys_common::mutex::Mutex;
 
 /// A type for TLS keys that are statically allocated.
 ///
@@ -74,7 +64,7 @@ use sys_common::mutex::Mutex;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```ignore (cannot-doctest-private-modules)
 /// use tls::os::{StaticKey, INIT};
 ///
 /// static KEY: StaticKey = INIT;
@@ -91,7 +81,7 @@ pub struct StaticKey {
     ///
     /// See `Key::new` for information about when the destructor runs and how
     /// it runs.
-    dtor: Option<unsafe extern fn(*mut u8)>,
+    dtor: Option<unsafe extern "C" fn(*mut u8)>,
 }
 
 /// A type for a safely managed OS-based TLS slot.
@@ -105,7 +95,7 @@ pub struct StaticKey {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore (cannot-doctest-private-modules)
 /// use tls::os::Key;
 ///
 /// let key = Key::new(None);
@@ -125,11 +115,8 @@ pub struct Key {
 pub const INIT: StaticKey = StaticKey::new(None);
 
 impl StaticKey {
-    pub const fn new(dtor: Option<unsafe extern fn(*mut u8)>) -> StaticKey {
-        StaticKey {
-            key: atomic::AtomicUsize::new(0),
-            dtor: dtor
-        }
+    pub const fn new(dtor: Option<unsafe extern "C" fn(*mut u8)>) -> StaticKey {
+        StaticKey { key: atomic::AtomicUsize::new(0), dtor }
     }
 
     /// Gets the value associated with this TLS key
@@ -137,20 +124,24 @@ impl StaticKey {
     /// This will lazily allocate a TLS key from the OS if one has not already
     /// been allocated.
     #[inline]
-    pub unsafe fn get(&self) -> *mut u8 { imp::get(self.key()) }
+    pub unsafe fn get(&self) -> *mut u8 {
+        imp::get(self.key())
+    }
 
     /// Sets this TLS key to a new value.
     ///
     /// This will lazily allocate a TLS key from the OS if one has not already
     /// been allocated.
     #[inline]
-    pub unsafe fn set(&self, val: *mut u8) { imp::set(self.key(), val) }
+    pub unsafe fn set(&self, val: *mut u8) {
+        imp::set(self.key(), val)
+    }
 
     #[inline]
     unsafe fn key(&self) -> imp::Key {
         match self.key.load(Ordering::Relaxed) {
             0 => self.lazy_init() as imp::Key,
-            n => n as imp::Key
+            n => n as imp::Key,
         }
     }
 
@@ -161,16 +152,17 @@ impl StaticKey {
         // Additionally a 0-index of a tls key hasn't been seen on windows, so
         // we just simplify the whole branch.
         if imp::requires_synchronized_create() {
+            // We never call `INIT_LOCK.init()`, so it is UB to attempt to
+            // acquire this mutex reentrantly!
             static INIT_LOCK: Mutex = Mutex::new();
-            INIT_LOCK.lock();
+            let _guard = INIT_LOCK.lock();
             let mut key = self.key.load(Ordering::SeqCst);
             if key == 0 {
                 key = imp::create(self.dtor) as usize;
                 self.key.store(key, Ordering::SeqCst);
             }
-            INIT_LOCK.unlock();
-            assert!(key != 0);
-            return key
+            rtassert!(key != 0);
+            return key;
         }
 
         // POSIX allows the key created here to be 0, but the compare_and_swap
@@ -190,12 +182,15 @@ impl StaticKey {
             imp::destroy(key1);
             key2
         };
-        assert!(key != 0);
+        rtassert!(key != 0);
         match self.key.compare_and_swap(0, key as usize, Ordering::SeqCst) {
             // The CAS succeeded, so we've created the actual key
             0 => key as usize,
             // If someone beat us to the punch, use their key instead
-            n => { imp::destroy(key); n }
+            n => {
+                imp::destroy(key);
+                n
+            }
         }
     }
 }
@@ -213,7 +208,7 @@ impl Key {
     /// Note that the destructor will not be run when the `Key` goes out of
     /// scope.
     #[inline]
-    pub fn new(dtor: Option<unsafe extern fn(*mut u8)>) -> Key {
+    pub fn new(dtor: Option<unsafe extern "C" fn(*mut u8)>) -> Key {
         Key { key: unsafe { imp::create(dtor) } }
     }
 
@@ -235,6 +230,38 @@ impl Drop for Key {
         // Right now Windows doesn't support TLS key destruction, but this also
         // isn't used anywhere other than tests, so just leak the TLS key.
         // unsafe { imp::destroy(self.key) }
+    }
+}
+
+pub unsafe fn register_dtor_fallback(t: *mut u8, dtor: unsafe extern "C" fn(*mut u8)) {
+    // The fallback implementation uses a vanilla OS-based TLS key to track
+    // the list of destructors that need to be run for this thread. The key
+    // then has its own destructor which runs all the other destructors.
+    //
+    // The destructor for DTORS is a little special in that it has a `while`
+    // loop to continuously drain the list of registered destructors. It
+    // *should* be the case that this loop always terminates because we
+    // provide the guarantee that a TLS key cannot be set after it is
+    // flagged for destruction.
+
+    static DTORS: StaticKey = StaticKey::new(Some(run_dtors));
+    type List = Vec<(*mut u8, unsafe extern "C" fn(*mut u8))>;
+    if DTORS.get().is_null() {
+        let v: Box<List> = box Vec::new();
+        DTORS.set(Box::into_raw(v) as *mut u8);
+    }
+    let list: &mut List = &mut *(DTORS.get() as *mut List);
+    list.push((t, dtor));
+
+    unsafe extern "C" fn run_dtors(mut ptr: *mut u8) {
+        while !ptr.is_null() {
+            let list: Box<List> = Box::from_raw(ptr as *mut List);
+            for (ptr, dtor) in list.into_iter() {
+                dtor(ptr);
+            }
+            ptr = DTORS.get();
+            DTORS.set(ptr::null_mut());
+        }
     }
 }
 

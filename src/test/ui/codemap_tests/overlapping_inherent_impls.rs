@@ -1,13 +1,3 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Test that you cannot define items with the same name in overlapping inherent
 // impl blocks.
 
@@ -16,7 +6,7 @@
 struct Foo;
 
 impl Foo {
-    fn id() {}
+    fn id() {} //~ ERROR duplicate definitions
 }
 
 impl Foo {
@@ -26,7 +16,7 @@ impl Foo {
 struct Bar<T>(T);
 
 impl<T> Bar<T> {
-    fn bar(&self) {}
+    fn bar(&self) {} //~ ERROR duplicate definitions
 }
 
 impl Bar<u32> {
@@ -36,7 +26,7 @@ impl Bar<u32> {
 struct Baz<T>(T);
 
 impl<T: Copy> Baz<T> {
-    fn baz(&self) {}
+    fn baz(&self) {} //~ ERROR duplicate definitions
 }
 
 impl<T> Baz<Vec<T>> {

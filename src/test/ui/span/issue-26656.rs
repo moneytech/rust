@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Issue #26656: Verify that trait objects cannot bypass dropck.
 
 // Using this instead of Fn etc. to take HRTB out of the equation.
@@ -20,7 +10,7 @@ impl<B: Button> Trigger<B> for () {
 
 // Still unsound Zook
 trait Button { fn push(&self); }
-struct Zook<B> { button: B, trigger: Box<Trigger<B>+'static> }
+struct Zook<B> { button: B, trigger: Box<dyn Trigger<B>+'static> }
 
 impl<B> Drop for Zook<B> {
     fn drop(&mut self) {
@@ -49,4 +39,4 @@ fn main() {
     ticking = Bomb { usable: true };
     zook.button = B::BigRedButton(&ticking);
 }
-//~^ ERROR `ticking` does not live long enough
+//~^^ ERROR `ticking` does not live long enough

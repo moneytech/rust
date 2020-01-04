@@ -1,14 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use core::ops::{Range, RangeFull, RangeFrom, RangeTo, RangeInclusive};
+use core::ops::{Bound, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo};
 
 // Test the Range structs without the syntactic sugar.
 
@@ -17,11 +7,11 @@ fn test_range() {
     let r = Range { start: 2, end: 10 };
     let mut count = 0;
     for (i, ri) in r.enumerate() {
-        assert!(ri == i + 2);
+        assert_eq!(ri, i + 2);
         assert!(ri >= 2 && ri < 10);
         count += 1;
     }
-    assert!(count == 8);
+    assert_eq!(count, 8);
 }
 
 #[test]
@@ -29,11 +19,11 @@ fn test_range_from() {
     let r = RangeFrom { start: 2 };
     let mut count = 0;
     for (i, ri) in r.take(10).enumerate() {
-        assert!(ri == i + 2);
+        assert_eq!(ri, i + 2);
         assert!(ri >= 2 && ri < 12);
         count += 1;
     }
-    assert!(count == 10);
+    assert_eq!(count, 10);
 }
 
 #[test]
@@ -50,21 +40,59 @@ fn test_full_range() {
 
 #[test]
 fn test_range_inclusive() {
-    let mut r = RangeInclusive { start: 1i8, end: 2 };
+    let mut r = RangeInclusive::new(1i8, 2);
     assert_eq!(r.next(), Some(1));
     assert_eq!(r.next(), Some(2));
     assert_eq!(r.next(), None);
 
-    r = RangeInclusive { start: 127i8, end: 127 };
+    r = RangeInclusive::new(127i8, 127);
     assert_eq!(r.next(), Some(127));
     assert_eq!(r.next(), None);
 
-    r = RangeInclusive { start: -128i8, end: -128 };
+    r = RangeInclusive::new(-128i8, -128);
     assert_eq!(r.next_back(), Some(-128));
     assert_eq!(r.next_back(), None);
 
     // degenerate
-    r = RangeInclusive { start: 1, end: -1 };
+    r = RangeInclusive::new(1, -1);
     assert_eq!(r.size_hint(), (0, Some(0)));
     assert_eq!(r.next(), None);
+}
+
+#[test]
+fn test_range_is_empty() {
+    use core::f32::*;
+
+    assert!(!(0.0..10.0).is_empty());
+    assert!((-0.0..0.0).is_empty());
+    assert!((10.0..0.0).is_empty());
+
+    assert!(!(NEG_INFINITY..INFINITY).is_empty());
+    assert!((EPSILON..NAN).is_empty());
+    assert!((NAN..EPSILON).is_empty());
+    assert!((NAN..NAN).is_empty());
+
+    assert!(!(0.0..=10.0).is_empty());
+    assert!(!(-0.0..=0.0).is_empty());
+    assert!((10.0..=0.0).is_empty());
+
+    assert!(!(NEG_INFINITY..=INFINITY).is_empty());
+    assert!((EPSILON..=NAN).is_empty());
+    assert!((NAN..=EPSILON).is_empty());
+    assert!((NAN..=NAN).is_empty());
+}
+
+#[test]
+fn test_bound_cloned_unbounded() {
+    assert_eq!(Bound::<&u32>::Unbounded.cloned(), Bound::Unbounded);
+}
+
+#[test]
+fn test_bound_cloned_included() {
+    assert_eq!(Bound::Included(&3).cloned(), Bound::Included(3));
+}
+
+#[test]
+fn test_bound_cloned_excluded() {
+    assert_eq!(Bound::Excluded(&3).cloned(), Bound::Excluded(3));
 }

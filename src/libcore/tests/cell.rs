@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 use core::cell::*;
 use core::default::Default;
 use std::mem::drop;
@@ -15,15 +5,26 @@ use std::mem::drop;
 #[test]
 fn smoketest_cell() {
     let x = Cell::new(10);
-    assert!(x == Cell::new(10));
-    assert!(x.get() == 10);
+    assert_eq!(x, Cell::new(10));
+    assert_eq!(x.get(), 10);
     x.set(20);
-    assert!(x == Cell::new(20));
-    assert!(x.get() == 20);
+    assert_eq!(x, Cell::new(20));
+    assert_eq!(x.get(), 20);
 
     let y = Cell::new((30, 40));
-    assert!(y == Cell::new((30, 40)));
-    assert!(y.get() == (30, 40));
+    assert_eq!(y, Cell::new((30, 40)));
+    assert_eq!(y.get(), (30, 40));
+}
+
+#[test]
+fn cell_update() {
+    let x = Cell::new(10);
+
+    assert_eq!(x.update(|x| x + 5), 15);
+    assert_eq!(x.get(), 15);
+
+    assert_eq!(x.update(|x| x / 3), 5);
+    assert_eq!(x.get(), 5);
 }
 
 #[test]
@@ -138,11 +139,11 @@ fn ref_clone_updates_flag() {
 fn ref_map_does_not_update_flag() {
     let x = RefCell::new(Some(5));
     {
-        let b1: Ref<Option<u32>> = x.borrow();
+        let b1: Ref<'_, Option<u32>> = x.borrow();
         assert!(x.try_borrow().is_ok());
         assert!(x.try_borrow_mut().is_err());
         {
-            let b2: Ref<u32> = Ref::map(b1, |o| o.as_ref().unwrap());
+            let b2: Ref<'_, u32> = Ref::map(b1, |o| o.as_ref().unwrap());
             assert_eq!(*b2, 5);
             assert!(x.try_borrow().is_ok());
             assert!(x.try_borrow_mut().is_err());
@@ -155,15 +156,73 @@ fn ref_map_does_not_update_flag() {
 }
 
 #[test]
+fn ref_map_split_updates_flag() {
+    let x = RefCell::new([1, 2]);
+    {
+        let b1 = x.borrow();
+        assert!(x.try_borrow().is_ok());
+        assert!(x.try_borrow_mut().is_err());
+        {
+            let (_b2, _b3) = Ref::map_split(b1, |slc| slc.split_at(1));
+            assert!(x.try_borrow().is_ok());
+            assert!(x.try_borrow_mut().is_err());
+        }
+        assert!(x.try_borrow().is_ok());
+        assert!(x.try_borrow_mut().is_ok());
+    }
+    assert!(x.try_borrow().is_ok());
+    assert!(x.try_borrow_mut().is_ok());
+
+    {
+        let b1 = x.borrow_mut();
+        assert!(x.try_borrow().is_err());
+        assert!(x.try_borrow_mut().is_err());
+        {
+            let (_b2, _b3) = RefMut::map_split(b1, |slc| slc.split_at_mut(1));
+            assert!(x.try_borrow().is_err());
+            assert!(x.try_borrow_mut().is_err());
+            drop(_b2);
+            assert!(x.try_borrow().is_err());
+            assert!(x.try_borrow_mut().is_err());
+        }
+        assert!(x.try_borrow().is_ok());
+        assert!(x.try_borrow_mut().is_ok());
+    }
+    assert!(x.try_borrow().is_ok());
+    assert!(x.try_borrow_mut().is_ok());
+}
+
+#[test]
+fn ref_map_split() {
+    let x = RefCell::new([1, 2]);
+    let (b1, b2) = Ref::map_split(x.borrow(), |slc| slc.split_at(1));
+    assert_eq!(*b1, [1]);
+    assert_eq!(*b2, [2]);
+}
+
+#[test]
+fn ref_mut_map_split() {
+    let x = RefCell::new([1, 2]);
+    {
+        let (mut b1, mut b2) = RefMut::map_split(x.borrow_mut(), |slc| slc.split_at_mut(1));
+        assert_eq!(*b1, [1]);
+        assert_eq!(*b2, [2]);
+        b1[0] = 2;
+        b2[0] = 1;
+    }
+    assert_eq!(*x.borrow(), [2, 1]);
+}
+
+#[test]
 fn ref_map_accessor() {
     struct X(RefCell<(u32, char)>);
     impl X {
-        fn accessor(&self) -> Ref<u32> {
+        fn accessor(&self) -> Ref<'_, u32> {
             Ref::map(self.0.borrow(), |tuple| &tuple.0)
         }
     }
     let x = X(RefCell::new((7, 'z')));
-    let d: Ref<u32> = x.accessor();
+    let d: Ref<'_, u32> = x.accessor();
     assert_eq!(*d, 7);
 }
 
@@ -171,13 +230,13 @@ fn ref_map_accessor() {
 fn ref_mut_map_accessor() {
     struct X(RefCell<(u32, char)>);
     impl X {
-        fn accessor(&self) -> RefMut<u32> {
+        fn accessor(&self) -> RefMut<'_, u32> {
             RefMut::map(self.0.borrow_mut(), |tuple| &mut tuple.0)
         }
     }
     let x = X(RefCell::new((7, 'z')));
     {
-        let mut d: RefMut<u32> = x.accessor();
+        let mut d: RefMut<'_, u32> = x.accessor();
         assert_eq!(*d, 7);
         *d += 1;
     }
@@ -191,7 +250,9 @@ fn as_ptr() {
     assert_eq!(1, unsafe { *c1.as_ptr() });
 
     let c2: Cell<usize> = Cell::new(0);
-    unsafe { *c2.as_ptr() = 1; }
+    unsafe {
+        *c2.as_ptr() = 1;
+    }
     assert_eq!(1, c2.get());
 
     let r1: RefCell<usize> = RefCell::new(0);
@@ -199,7 +260,9 @@ fn as_ptr() {
     assert_eq!(1, unsafe { *r1.as_ptr() });
 
     let r2: RefCell<usize> = RefCell::new(0);
-    unsafe { *r2.as_ptr() = 1; }
+    unsafe {
+        *r2.as_ptr() = 1;
+    }
     assert_eq!(1, *r2.borrow());
 }
 
@@ -274,16 +337,33 @@ fn refcell_unsized() {
 fn refcell_ref_coercion() {
     let cell: RefCell<[i32; 3]> = RefCell::new([1, 2, 3]);
     {
-        let mut cellref: RefMut<[i32; 3]> = cell.borrow_mut();
+        let mut cellref: RefMut<'_, [i32; 3]> = cell.borrow_mut();
         cellref[0] = 4;
-        let mut coerced: RefMut<[i32]> = cellref;
+        let mut coerced: RefMut<'_, [i32]> = cellref;
         coerced[2] = 5;
     }
     {
         let comp: &mut [i32] = &mut [4, 2, 5];
-        let cellref: Ref<[i32; 3]> = cell.borrow();
+        let cellref: Ref<'_, [i32; 3]> = cell.borrow();
         assert_eq!(&*cellref, comp);
-        let coerced: Ref<[i32]> = cellref;
+        let coerced: Ref<'_, [i32]> = cellref;
         assert_eq!(&*coerced, comp);
     }
+}
+
+#[test]
+#[should_panic]
+fn refcell_swap_borrows() {
+    let x = RefCell::new(0);
+    let _b = x.borrow();
+    let y = RefCell::new(1);
+    x.swap(&y);
+}
+
+#[test]
+#[should_panic]
+fn refcell_replace_borrows() {
+    let x = RefCell::new(0);
+    let _b = x.borrow();
+    x.replace(1);
 }

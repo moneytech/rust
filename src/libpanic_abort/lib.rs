@@ -1,42 +1,32 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Implementation of Rust panics via process aborts
 //!
 //! When compared to the implementation via unwinding, this crate is *much*
 //! simpler! That being said, it's not quite as versatile, but here goes!
 
 #![no_std]
-#![crate_name = "panic_abort"]
-#![crate_type = "rlib"]
 #![unstable(feature = "panic_abort", issue = "32837")]
-#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
-       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
-       html_root_url = "https://doc.rust-lang.org/nightly/",
-       issue_tracker_base_url = "https://github.com/rust-lang/rust/issues/")]
-#![deny(warnings)]
-
-#![feature(staged_api)]
-
+#![doc(
+    html_root_url = "https://doc.rust-lang.org/nightly/",
+    issue_tracker_base_url = "https://github.com/rust-lang/rust/issues/"
+)]
 #![panic_runtime]
+#![allow(unused_features)]
+#![feature(core_intrinsics)]
+#![feature(libc)]
+#![feature(nll)]
 #![feature(panic_runtime)]
-#![cfg_attr(unix, feature(libc))]
-#![cfg_attr(any(target_os = "redox", windows), feature(core_intrinsics))]
+#![feature(staged_api)]
+#![feature(rustc_attrs)]
 
 // Rust's "try" function, but if we're aborting on panics we just call the
 // function as there's nothing else we need to do here.
-#[no_mangle]
-pub unsafe extern fn __rust_maybe_catch_panic(f: fn(*mut u8),
-                                              data: *mut u8,
-                                              _data_ptr: *mut usize,
-                                              _vtable_ptr: *mut usize) -> u32 {
+#[rustc_std_internal_symbol]
+pub unsafe extern "C" fn __rust_maybe_catch_panic(
+    f: fn(*mut u8),
+    data: *mut u8,
+    _data_ptr: *mut usize,
+    _vtable_ptr: *mut usize,
+) -> u32 {
     f(data);
     0
 }
@@ -51,19 +41,27 @@ pub unsafe extern fn __rust_maybe_catch_panic(f: fn(*mut u8),
 // which would break compat with XP. For now just use `intrinsics::abort` which
 // will kill us with an illegal instruction, which will do a good enough job for
 // now hopefully.
-#[no_mangle]
-pub unsafe extern fn __rust_start_panic(_data: usize, _vtable: usize) -> u32 {
+#[rustc_std_internal_symbol]
+pub unsafe extern "C" fn __rust_start_panic(_payload: usize) -> u32 {
     abort();
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "cloudabi"))]
     unsafe fn abort() -> ! {
-        extern crate libc;
         libc::abort();
     }
 
-    #[cfg(any(target_os = "redox", windows))]
+    #[cfg(any(windows, all(target_arch = "wasm32", not(target_os = "emscripten"))))]
     unsafe fn abort() -> ! {
         core::intrinsics::abort();
+    }
+
+    #[cfg(any(target_os = "hermit", all(target_vendor = "fortanix", target_env = "sgx")))]
+    unsafe fn abort() -> ! {
+        // call std::sys::abort_internal
+        extern "C" {
+            pub fn __rust_abort() -> !;
+        }
+        __rust_abort();
     }
 }
 
@@ -94,23 +92,23 @@ pub unsafe extern fn __rust_start_panic(_data: usize, _vtable: usize) -> u32 {
 // binaries, but it should never be called as we don't link in an unwinding
 // runtime at all.
 pub mod personalities {
-
     #[no_mangle]
-    #[cfg(not(all(target_os = "windows",
-                  target_env = "gnu",
-                  target_arch = "x86_64")))]
-    pub extern fn rust_eh_personality() {}
+    #[cfg(not(any(
+        all(target_arch = "wasm32", not(target_os = "emscripten"),),
+        all(target_os = "windows", target_env = "gnu", target_arch = "x86_64",),
+    )))]
+    pub extern "C" fn rust_eh_personality() {}
 
     // On x86_64-pc-windows-gnu we use our own personality function that needs
     // to return `ExceptionContinueSearch` as we're passing on all our frames.
     #[no_mangle]
-    #[cfg(all(target_os = "windows",
-              target_env = "gnu",
-              target_arch = "x86_64"))]
-    pub extern fn rust_eh_personality(_record: usize,
-                                      _frame: usize,
-                                      _context: usize,
-                                      _dispatcher: usize) -> u32 {
+    #[cfg(all(target_os = "windows", target_env = "gnu", target_arch = "x86_64"))]
+    pub extern "C" fn rust_eh_personality(
+        _record: usize,
+        _frame: usize,
+        _context: usize,
+        _dispatcher: usize,
+    ) -> u32 {
         1 // `ExceptionContinueSearch`
     }
 
@@ -121,14 +119,14 @@ pub mod personalities {
     // body is empty.
     #[no_mangle]
     #[cfg(all(target_os = "windows", target_env = "gnu"))]
-    pub extern fn rust_eh_unwind_resume() {}
+    pub extern "C" fn rust_eh_unwind_resume() {}
 
     // These two are called by our startup objects on i686-pc-windows-gnu, but
     // they don't need to do anything so the bodies are nops.
     #[no_mangle]
     #[cfg(all(target_os = "windows", target_env = "gnu", target_arch = "x86"))]
-    pub extern fn rust_eh_register_frames() {}
+    pub extern "C" fn rust_eh_register_frames() {}
     #[no_mangle]
     #[cfg(all(target_os = "windows", target_env = "gnu", target_arch = "x86"))]
-    pub extern fn rust_eh_unregister_frames() {}
+    pub extern "C" fn rust_eh_unregister_frames() {}
 }

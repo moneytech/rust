@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // revisions: rpass1 cfail2
 // compile-flags: -Z query-dep-graph
 
@@ -35,20 +25,16 @@ mod x {
 mod y {
     use x;
 
-    #[rustc_clean(label="TypeckTables", cfg="cfail2")]
-    #[rustc_clean(label="TransCrateItem", cfg="cfail2")]
+    #[rustc_clean(label="typeck_tables_of", cfg="cfail2")]
     pub fn y() {
-        //[cfail2]~^ ERROR `TypeckTables("y::y")` not found in dep graph, but should be clean
-        //[cfail2]~| ERROR `TransCrateItem("y::y")` not found in dep graph, but should be clean
+        //[cfail2]~^ ERROR `typeck_tables_of(y::y)` should be clean but is not
         x::x();
     }
 }
 
 mod z {
-    #[rustc_dirty(label="TypeckTables", cfg="cfail2")]
-    #[rustc_dirty(label="TransCrateItem", cfg="cfail2")]
+    #[rustc_dirty(label="typeck_tables_of", cfg="cfail2")]
     pub fn z() {
-        //[cfail2]~^ ERROR `TypeckTables("z::z")` found in dep graph, but should be dirty
-        //[cfail2]~| ERROR `TransCrateItem("z::z")` found in dep graph, but should be dirty
+        //[cfail2]~^ ERROR `typeck_tables_of(z::z)` should be dirty but is not
     }
 }

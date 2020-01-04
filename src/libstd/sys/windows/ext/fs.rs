@@ -1,22 +1,12 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Windows-specific extensions for the primitives in the `std::fs` module.
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use fs::{self, OpenOptions, Metadata};
-use io;
-use path::Path;
-use sys;
-use sys_common::{AsInnerMut, AsInner};
+use crate::fs::{self, Metadata, OpenOptions};
+use crate::io;
+use crate::path::Path;
+use crate::sys;
+use crate::sys_common::{AsInner, AsInnerMut};
 
 /// Windows-specific extensions to [`File`].
 ///
@@ -32,7 +22,7 @@ pub trait FileExt {
     /// function, it is set to the end of the read.
     ///
     /// Reading beyond the end of the file will always return with a length of
-    /// 0.
+    /// 0\.
     ///
     /// Note that similar to `File::read`, it is not an error to return with a
     /// short read. When returning from such a short read, the file pointer is
@@ -45,15 +35,15 @@ pub trait FileExt {
     /// use std::fs::File;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let mut file = File::open("foo.txt")?;
-    /// let mut buffer = [0; 10];
+    /// fn main() -> io::Result<()> {
+    ///     let mut file = File::open("foo.txt")?;
+    ///     let mut buffer = [0; 10];
     ///
-    /// // Read 10 bytes, starting 72 bytes from the
-    /// // start of the file.
-    /// file.seek_read(&mut buffer[..], 72)?;
-    /// # Ok(())
-    /// # }
+    ///     // Read 10 bytes, starting 72 bytes from the
+    ///     // start of the file.
+    ///     file.seek_read(&mut buffer[..], 72)?;
+    ///     Ok(())
+    /// }
     /// ```
     #[stable(feature = "file_offset", since = "1.15.0")]
     fn seek_read(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
@@ -66,7 +56,7 @@ pub trait FileExt {
     /// from the current cursor. The current cursor **is** affected by this
     /// function, it is set to the end of the write.
     ///
-    /// When writing beyond the end of the file, the file is appropiately
+    /// When writing beyond the end of the file, the file is appropriately
     /// extended and the intermediate bytes are left uninitialized.
     ///
     /// Note that similar to `File::write`, it is not an error to return a
@@ -79,14 +69,14 @@ pub trait FileExt {
     /// use std::fs::File;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> std::io::Result<()> {
-    /// let mut buffer = File::create("foo.txt")?;
+    /// fn main() -> std::io::Result<()> {
+    ///     let mut buffer = File::create("foo.txt")?;
     ///
-    /// // Write a byte string starting 72 bytes from
-    /// // the start of the file.
-    /// buffer.seek_write(b"some bytes", 72)?;
-    /// # Ok(())
-    /// # }
+    ///     // Write a byte string starting 72 bytes from
+    ///     // the start of the file.
+    ///     buffer.seek_write(b"some bytes", 72)?;
+    ///     Ok(())
+    /// }
     /// ```
     #[stable(feature = "file_offset", since = "1.15.0")]
     fn seek_write(&self, buf: &[u8], offset: u64) -> io::Result<usize>;
@@ -103,9 +93,9 @@ impl FileExt for fs::File {
     }
 }
 
-/// Windows-specific extensions to [`OpenOptions`].
+/// Windows-specific extensions to [`fs::OpenOptions`].
 ///
-/// [`OpenOptions`]: ../../../fs/struct.OpenOptions.html
+/// [`fs::OpenOptions`]: ../../../../std/fs/struct.OpenOptions.html
 #[stable(feature = "open_options_ext", since = "1.10.0")]
 pub trait OpenOptionsExt {
     /// Overrides the `dwDesiredAccess` argument to the call to [`CreateFile`]
@@ -127,7 +117,7 @@ pub trait OpenOptionsExt {
     /// let file = OpenOptions::new().access_mode(0).open("foo.txt");
     /// ```
     ///
-    /// [`CreateFile`]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa363858.aspx
+    /// [`CreateFile`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
     #[stable(feature = "open_options_ext", since = "1.10.0")]
     fn access_mode(&mut self, access: u32) -> &mut Self;
 
@@ -136,7 +126,7 @@ pub trait OpenOptionsExt {
     ///
     /// By default `share_mode` is set to
     /// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`. This allows
-    /// other processes to to read, write, and delete/rename the same file
+    /// other processes to read, write, and delete/rename the same file
     /// while it is open. Removing any of the flags will prevent other
     /// processes from performing the corresponding operation until the file
     /// handle is closed.
@@ -155,7 +145,7 @@ pub trait OpenOptionsExt {
     ///     .open("foo.txt");
     /// ```
     ///
-    /// [`CreateFile`]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa363858.aspx
+    /// [`CreateFile`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
     #[stable(feature = "open_options_ext", since = "1.10.0")]
     fn share_mode(&mut self, val: u32) -> &mut Self;
 
@@ -169,8 +159,10 @@ pub trait OpenOptionsExt {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # #[cfg(for_demonstration_only)]
     /// extern crate winapi;
+    /// # mod winapi { pub const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x04000000; }
     ///
     /// use std::fs::OpenOptions;
     /// use std::os::windows::prelude::*;
@@ -182,8 +174,8 @@ pub trait OpenOptionsExt {
     ///     .open("foo.txt");
     /// ```
     ///
-    /// [`CreateFile`]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa363858.aspx
-    /// [`CreateFile2`]: https://msdn.microsoft.com/en-us/library/windows/desktop/hh449422.aspx
+    /// [`CreateFile`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+    /// [`CreateFile2`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfile2
     #[stable(feature = "open_options_ext", since = "1.10.0")]
     fn custom_flags(&mut self, flags: u32) -> &mut Self;
 
@@ -204,8 +196,10 @@ pub trait OpenOptionsExt {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # #[cfg(for_demonstration_only)]
     /// extern crate winapi;
+    /// # mod winapi { pub const FILE_ATTRIBUTE_HIDDEN: u32 = 2; }
     ///
     /// use std::fs::OpenOptions;
     /// use std::os::windows::prelude::*;
@@ -217,8 +211,8 @@ pub trait OpenOptionsExt {
     ///     .open("foo.txt");
     /// ```
     ///
-    /// [`CreateFile`]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa363858.aspx
-    /// [`CreateFile2`]: https://msdn.microsoft.com/en-us/library/windows/desktop/hh449422.aspx
+    /// [`CreateFile`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+    /// [`CreateFile2`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfile2
     #[stable(feature = "open_options_ext", since = "1.10.0")]
     fn attributes(&mut self, val: u32) -> &mut Self;
 
@@ -226,13 +220,27 @@ pub trait OpenOptionsExt {
     /// the specified value (or combines it with `custom_flags` and `attributes`
     /// to set the `dwFlagsAndAttributes` for [`CreateFile`]).
     ///
-    /// By default, `security_qos_flags` is set to `SECURITY_ANONYMOUS`. For
-    /// information about possible values, see [Impersonation Levels] on the
-    /// Windows Dev Center site.
+    /// By default `security_qos_flags` is not set. It should be specified when
+    /// opening a named pipe, to control to which degree a server process can
+    /// act on behalf of a client process (security impersonation level).
     ///
+    /// When `security_qos_flags` is not set a malicious program can gain the
+    /// elevated privileges of a privileged Rust process when it allows opening
+    /// user-specified paths, by tricking it into opening a named pipe. So
+    /// arguably `security_qos_flags` should also be set when opening arbitrary
+    /// paths. However the bits can then conflict with other flags, specifically
+    /// `FILE_FLAG_OPEN_NO_RECALL`.
+    ///
+    /// For information about possible values, see [Impersonation Levels] on the
+    /// Windows Dev Center site. The `SECURITY_SQOS_PRESENT` flag is set
+    /// automatically when using this method.
+
     /// # Examples
     ///
     /// ```no_run
+    /// # #[cfg(for_demonstration_only)]
+    /// extern crate winapi;
+    /// # mod winapi { pub const SECURITY_IDENTIFICATION: u32 = 0; }
     /// use std::fs::OpenOptions;
     /// use std::os::windows::prelude::*;
     ///
@@ -241,15 +249,15 @@ pub trait OpenOptionsExt {
     ///     .create(true)
     ///
     ///     // Sets the flag value to `SecurityIdentification`.
-    ///     .security_qos_flags(1)
+    ///     .security_qos_flags(winapi::SECURITY_IDENTIFICATION)
     ///
-    ///     .open("foo.txt");
+    ///     .open(r"\\.\pipe\MyPipe");
     /// ```
     ///
-    /// [`CreateFile`]: https://msdn.microsoft.com/en-us/library/windows/desktop/aa363858.aspx
-    /// [`CreateFile2`]: https://msdn.microsoft.com/en-us/library/windows/desktop/hh449422.aspx
+    /// [`CreateFile`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+    /// [`CreateFile2`]: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfile2
     /// [Impersonation Levels]:
-    ///     https://msdn.microsoft.com/en-us/library/windows/desktop/aa379572.aspx
+    ///     https://docs.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-security_impersonation_level
     #[stable(feature = "open_options_ext", since = "1.10.0")]
     fn security_qos_flags(&mut self, flags: u32) -> &mut OpenOptions;
 }
@@ -257,35 +265,39 @@ pub trait OpenOptionsExt {
 #[stable(feature = "open_options_ext", since = "1.10.0")]
 impl OpenOptionsExt for OpenOptions {
     fn access_mode(&mut self, access: u32) -> &mut OpenOptions {
-        self.as_inner_mut().access_mode(access); self
+        self.as_inner_mut().access_mode(access);
+        self
     }
 
     fn share_mode(&mut self, share: u32) -> &mut OpenOptions {
-        self.as_inner_mut().share_mode(share); self
+        self.as_inner_mut().share_mode(share);
+        self
     }
 
     fn custom_flags(&mut self, flags: u32) -> &mut OpenOptions {
-        self.as_inner_mut().custom_flags(flags); self
+        self.as_inner_mut().custom_flags(flags);
+        self
     }
 
     fn attributes(&mut self, attributes: u32) -> &mut OpenOptions {
-        self.as_inner_mut().attributes(attributes); self
+        self.as_inner_mut().attributes(attributes);
+        self
     }
 
     fn security_qos_flags(&mut self, flags: u32) -> &mut OpenOptions {
-        self.as_inner_mut().security_qos_flags(flags); self
+        self.as_inner_mut().security_qos_flags(flags);
+        self
     }
 }
 
-/// Extension methods for [`fs::Metadata`] to access the raw fields contained
-/// within.
+/// Windows-specific extensions to [`fs::Metadata`].
 ///
 /// The data members that this trait exposes correspond to the members
 /// of the [`BY_HANDLE_FILE_INFORMATION`] structure.
 ///
-/// [`fs::Metadata`]: ../../../fs/struct.Metadata.html
+/// [`fs::Metadata`]: ../../../../std/fs/struct.Metadata.html
 /// [`BY_HANDLE_FILE_INFORMATION`]:
-///     https://msdn.microsoft.com/en-us/library/windows/desktop/aa363788.aspx
+///     https://docs.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information
 #[stable(feature = "metadata_ext", since = "1.1.0")]
 pub trait MetadataExt {
     /// Returns the value of the `dwFileAttributes` field of this metadata.
@@ -301,15 +313,15 @@ pub trait MetadataExt {
     /// use std::fs;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let metadata = fs::metadata("foo.txt")?;
-    /// let attributes = metadata.file_attributes();
-    /// # Ok(())
-    /// # }
+    /// fn main() -> io::Result<()> {
+    ///     let metadata = fs::metadata("foo.txt")?;
+    ///     let attributes = metadata.file_attributes();
+    ///     Ok(())
+    /// }
     /// ```
     ///
     /// [File Attribute Constants]:
-    ///     https://msdn.microsoft.com/en-us/library/windows/desktop/gg258117.aspx
+    ///     https://docs.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants
     #[stable(feature = "metadata_ext", since = "1.1.0")]
     fn file_attributes(&self) -> u32;
 
@@ -331,14 +343,14 @@ pub trait MetadataExt {
     /// use std::fs;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let metadata = fs::metadata("foo.txt")?;
-    /// let creation_time = metadata.creation_time();
-    /// # Ok(())
-    /// # }
+    /// fn main() -> io::Result<()> {
+    ///     let metadata = fs::metadata("foo.txt")?;
+    ///     let creation_time = metadata.creation_time();
+    ///     Ok(())
+    /// }
     /// ```
     ///
-    /// [`FILETIME`]: https://msdn.microsoft.com/en-us/library/windows/desktop/ms724284.aspx
+    /// [`FILETIME`]: https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime
     #[stable(feature = "metadata_ext", since = "1.1.0")]
     fn creation_time(&self) -> u64;
 
@@ -366,14 +378,14 @@ pub trait MetadataExt {
     /// use std::fs;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let metadata = fs::metadata("foo.txt")?;
-    /// let last_access_time = metadata.last_access_time();
-    /// # Ok(())
-    /// # }
+    /// fn main() -> io::Result<()> {
+    ///     let metadata = fs::metadata("foo.txt")?;
+    ///     let last_access_time = metadata.last_access_time();
+    ///     Ok(())
+    /// }
     /// ```
     ///
-    /// [`FILETIME`]: https://msdn.microsoft.com/en-us/library/windows/desktop/ms724284.aspx
+    /// [`FILETIME`]: https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime
     #[stable(feature = "metadata_ext", since = "1.1.0")]
     fn last_access_time(&self) -> u64;
 
@@ -389,8 +401,8 @@ pub trait MetadataExt {
     /// to. For a directory, the structure specifies when the directory was
     /// created.
     ///
-    /// If the underlying filesystem does not support the last write time
-    /// time, the returned value is 0.
+    /// If the underlying filesystem does not support the last write time,
+    /// the returned value is 0.
     ///
     /// # Examples
     ///
@@ -399,14 +411,14 @@ pub trait MetadataExt {
     /// use std::fs;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let metadata = fs::metadata("foo.txt")?;
-    /// let last_write_time = metadata.last_write_time();
-    /// # Ok(())
-    /// # }
+    /// fn main() -> io::Result<()> {
+    ///     let metadata = fs::metadata("foo.txt")?;
+    ///     let last_write_time = metadata.last_write_time();
+    ///     Ok(())
+    /// }
     /// ```
     ///
-    /// [`FILETIME`]: https://msdn.microsoft.com/en-us/library/windows/desktop/ms724284.aspx
+    /// [`FILETIME`]: https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime
     #[stable(feature = "metadata_ext", since = "1.1.0")]
     fn last_write_time(&self) -> u64;
 
@@ -422,23 +434,94 @@ pub trait MetadataExt {
     /// use std::fs;
     /// use std::os::windows::prelude::*;
     ///
-    /// # fn foo() -> io::Result<()> {
-    /// let metadata = fs::metadata("foo.txt")?;
-    /// let file_size = metadata.file_size();
-    /// # Ok(())
-    /// # }
+    /// fn main() -> io::Result<()> {
+    ///     let metadata = fs::metadata("foo.txt")?;
+    ///     let file_size = metadata.file_size();
+    ///     Ok(())
+    /// }
     /// ```
     #[stable(feature = "metadata_ext", since = "1.1.0")]
     fn file_size(&self) -> u64;
+
+    /// Returns the value of the `dwVolumeSerialNumber` field of this
+    /// metadata.
+    ///
+    /// This will return `None` if the `Metadata` instance was created from a
+    /// call to `DirEntry::metadata`. If this `Metadata` was created by using
+    /// `fs::metadata` or `File::metadata`, then this will return `Some`.
+    #[unstable(feature = "windows_by_handle", issue = "63010")]
+    fn volume_serial_number(&self) -> Option<u32>;
+
+    /// Returns the value of the `nNumberOfLinks` field of this
+    /// metadata.
+    ///
+    /// This will return `None` if the `Metadata` instance was created from a
+    /// call to `DirEntry::metadata`. If this `Metadata` was created by using
+    /// `fs::metadata` or `File::metadata`, then this will return `Some`.
+    #[unstable(feature = "windows_by_handle", issue = "63010")]
+    fn number_of_links(&self) -> Option<u32>;
+
+    /// Returns the value of the `nFileIndex{Low,High}` fields of this
+    /// metadata.
+    ///
+    /// This will return `None` if the `Metadata` instance was created from a
+    /// call to `DirEntry::metadata`. If this `Metadata` was created by using
+    /// `fs::metadata` or `File::metadata`, then this will return `Some`.
+    #[unstable(feature = "windows_by_handle", issue = "63010")]
+    fn file_index(&self) -> Option<u64>;
 }
 
 #[stable(feature = "metadata_ext", since = "1.1.0")]
 impl MetadataExt for Metadata {
-    fn file_attributes(&self) -> u32 { self.as_inner().attrs() }
-    fn creation_time(&self) -> u64 { self.as_inner().created_u64() }
-    fn last_access_time(&self) -> u64 { self.as_inner().accessed_u64() }
-    fn last_write_time(&self) -> u64 { self.as_inner().modified_u64() }
-    fn file_size(&self) -> u64 { self.as_inner().size() }
+    fn file_attributes(&self) -> u32 {
+        self.as_inner().attrs()
+    }
+    fn creation_time(&self) -> u64 {
+        self.as_inner().created_u64()
+    }
+    fn last_access_time(&self) -> u64 {
+        self.as_inner().accessed_u64()
+    }
+    fn last_write_time(&self) -> u64 {
+        self.as_inner().modified_u64()
+    }
+    fn file_size(&self) -> u64 {
+        self.as_inner().size()
+    }
+    fn volume_serial_number(&self) -> Option<u32> {
+        self.as_inner().volume_serial_number()
+    }
+    fn number_of_links(&self) -> Option<u32> {
+        self.as_inner().number_of_links()
+    }
+    fn file_index(&self) -> Option<u64> {
+        self.as_inner().file_index()
+    }
+}
+
+/// Windows-specific extensions to [`FileType`].
+///
+/// On Windows, a symbolic link knows whether it is a file or directory.
+///
+/// [`FileType`]: ../../../../std/fs/struct.FileType.html
+#[unstable(feature = "windows_file_type_ext", issue = "none")]
+pub trait FileTypeExt {
+    /// Returns `true` if this file type is a symbolic link that is also a directory.
+    #[unstable(feature = "windows_file_type_ext", issue = "none")]
+    fn is_symlink_dir(&self) -> bool;
+    /// Returns `true` if this file type is a symbolic link that is also a file.
+    #[unstable(feature = "windows_file_type_ext", issue = "none")]
+    fn is_symlink_file(&self) -> bool;
+}
+
+#[unstable(feature = "windows_file_type_ext", issue = "none")]
+impl FileTypeExt for fs::FileType {
+    fn is_symlink_dir(&self) -> bool {
+        self.as_inner().is_symlink_dir()
+    }
+    fn is_symlink_file(&self) -> bool {
+        self.as_inner().is_symlink_file()
+    }
 }
 
 /// Creates a new file symbolic link on the filesystem.
@@ -451,14 +534,13 @@ impl MetadataExt for Metadata {
 /// ```no_run
 /// use std::os::windows::fs;
 ///
-/// # fn foo() -> std::io::Result<()> {
-/// fs::symlink_file("a.txt", "b.txt")?;
-/// # Ok(())
-/// # }
+/// fn main() -> std::io::Result<()> {
+///     fs::symlink_file("a.txt", "b.txt")?;
+///     Ok(())
+/// }
 /// ```
 #[stable(feature = "symlink", since = "1.1.0")]
-pub fn symlink_file<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q)
-                                                    -> io::Result<()> {
+pub fn symlink_file<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
     sys::fs::symlink_inner(src.as_ref(), dst.as_ref(), false)
 }
 
@@ -472,13 +554,12 @@ pub fn symlink_file<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q)
 /// ```no_run
 /// use std::os::windows::fs;
 ///
-/// # fn foo() -> std::io::Result<()> {
-/// fs::symlink_file("a", "b")?;
-/// # Ok(())
-/// # }
+/// fn main() -> std::io::Result<()> {
+///     fs::symlink_dir("a", "b")?;
+///     Ok(())
+/// }
 /// ```
 #[stable(feature = "symlink", since = "1.1.0")]
-pub fn symlink_dir<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q)
-                                                   -> io::Result<()> {
+pub fn symlink_dir<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
     sys::fs::symlink_inner(src.as_ref(), dst.as_ref(), true)
 }

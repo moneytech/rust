@@ -1,25 +1,17 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+use crate::io::prelude::*;
 
-use io::prelude::*;
+use crate::cmp;
+use crate::io::{self, Error, ErrorKind, Initializer, IoSlice, IoSliceMut, SeekFrom};
 
 use core::convert::TryInto;
-use cmp;
-use io::{self, SeekFrom, Error, ErrorKind};
 
-/// A `Cursor` wraps another type and provides it with a
+/// A `Cursor` wraps an in-memory buffer and provides it with a
 /// [`Seek`] implementation.
 ///
-/// `Cursor`s are typically used with in-memory buffers to allow them to
-/// implement [`Read`] and/or [`Write`], allowing these buffers to be used
-/// anywhere you might use a reader or writer that does actual I/O.
+/// `Cursor`s are used with in-memory buffers, anything implementing
+/// `AsRef<[u8]>`, to allow them to implement [`Read`] and/or [`Write`],
+/// allowing these buffers to be used anywhere you might use a reader or writer
+/// that does actual I/O.
 ///
 /// The standard library implements some I/O traits on various types which
 /// are commonly used as a buffer, like `Cursor<`[`Vec`]`<u8>>` and
@@ -69,7 +61,7 @@ use io::{self, SeekFrom, Error, ErrorKind};
 /// // now let's write a test
 /// #[test]
 /// fn test_writes_bytes() {
-///     // setting up a real File is much more slow than an in-memory buffer,
+///     // setting up a real File is much slower than an in-memory buffer,
 ///     // let's use a cursor instead
 ///     use std::io::Cursor;
 ///     let mut buff = Cursor::new(vec![0; 15]);
@@ -80,18 +72,18 @@ use io::{self, SeekFrom, Error, ErrorKind};
 /// }
 /// ```
 #[stable(feature = "rust1", since = "1.0.0")]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Cursor<T> {
     inner: T,
     pos: u64,
 }
 
 impl<T> Cursor<T> {
-    /// Creates a new cursor wrapping the provided underlying I/O object.
+    /// Creates a new cursor wrapping the provided underlying in-memory buffer.
     ///
-    /// Cursor initial position is `0` even if underlying object (e.
-    /// g. `Vec`) is not empty. So writing to cursor starts with
-    /// overwriting `Vec` content, not with appending to it.
+    /// Cursor initial position is `0` even if underlying buffer (e.g., `Vec`)
+    /// is not empty. So writing to cursor starts with overwriting `Vec`
+    /// content, not with appending to it.
     ///
     /// # Examples
     ///
@@ -121,7 +113,9 @@ impl<T> Cursor<T> {
     /// let vec = buff.into_inner();
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn into_inner(self) -> T { self.inner }
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
 
     /// Gets a reference to the underlying value in this cursor.
     ///
@@ -137,7 +131,9 @@ impl<T> Cursor<T> {
     /// let reference = buff.get_ref();
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn get_ref(&self) -> &T { &self.inner }
+    pub fn get_ref(&self) -> &T {
+        &self.inner
+    }
 
     /// Gets a mutable reference to the underlying value in this cursor.
     ///
@@ -156,7 +152,9 @@ impl<T> Cursor<T> {
     /// let reference = buff.get_mut();
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn get_mut(&mut self) -> &mut T { &mut self.inner }
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
 
     /// Returns the current position of this cursor.
     ///
@@ -178,7 +176,9 @@ impl<T> Cursor<T> {
     /// assert_eq!(buff.position(), 1);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn position(&self) -> u64 { self.pos }
+    pub fn position(&self) -> u64 {
+        self.pos
+    }
 
     /// Sets the position of this cursor.
     ///
@@ -198,14 +198,22 @@ impl<T> Cursor<T> {
     /// assert_eq!(buff.position(), 4);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn set_position(&mut self, pos: u64) { self.pos = pos; }
+    pub fn set_position(&mut self, pos: u64) {
+        self.pos = pos;
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<T> io::Seek for Cursor<T> where T: AsRef<[u8]> {
+impl<T> io::Seek for Cursor<T>
+where
+    T: AsRef<[u8]>,
+{
     fn seek(&mut self, style: SeekFrom) -> io::Result<u64> {
         let (base_pos, offset) = match style {
-            SeekFrom::Start(n) => { self.pos = n; return Ok(n); }
+            SeekFrom::Start(n) => {
+                self.pos = n;
+                return Ok(n);
+            }
             SeekFrom::End(n) => (self.inner.as_ref().len() as u64, n),
             SeekFrom::Current(n) => (self.pos, n),
         };
@@ -215,89 +223,215 @@ impl<T> io::Seek for Cursor<T> where T: AsRef<[u8]> {
             base_pos.checked_sub((offset.wrapping_neg()) as u64)
         };
         match new_pos {
-            Some(n) => {self.pos = n; Ok(self.pos)}
-            None => Err(Error::new(ErrorKind::InvalidInput,
-                           "invalid seek to a negative or overflowing position"))
+            Some(n) => {
+                self.pos = n;
+                Ok(self.pos)
+            }
+            None => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "invalid seek to a negative or overflowing position",
+            )),
         }
+    }
+
+    fn stream_len(&mut self) -> io::Result<u64> {
+        Ok(self.inner.as_ref().len() as u64)
+    }
+
+    fn stream_position(&mut self) -> io::Result<u64> {
+        Ok(self.pos)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<T> Read for Cursor<T> where T: AsRef<[u8]> {
+impl<T> Read for Cursor<T>
+where
+    T: AsRef<[u8]>,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = Read::read(&mut self.fill_buf()?, buf)?;
         self.pos += n as u64;
         Ok(n)
     }
+
+    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        let mut nread = 0;
+        for buf in bufs {
+            let n = self.read(buf)?;
+            nread += n;
+            if n < buf.len() {
+                break;
+            }
+        }
+        Ok(nread)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        let n = buf.len();
+        Read::read_exact(&mut self.fill_buf()?, buf)?;
+        self.pos += n as u64;
+        Ok(())
+    }
+
+    #[inline]
+    unsafe fn initializer(&self) -> Initializer {
+        Initializer::nop()
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<T> BufRead for Cursor<T> where T: AsRef<[u8]> {
+impl<T> BufRead for Cursor<T>
+where
+    T: AsRef<[u8]>,
+{
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         let amt = cmp::min(self.pos, self.inner.as_ref().len() as u64);
         Ok(&self.inner.as_ref()[(amt as usize)..])
     }
-    fn consume(&mut self, amt: usize) { self.pos += amt as u64; }
+    fn consume(&mut self, amt: usize) {
+        self.pos += amt as u64;
+    }
+}
+
+// Non-resizing write implementation
+#[inline]
+fn slice_write(pos_mut: &mut u64, slice: &mut [u8], buf: &[u8]) -> io::Result<usize> {
+    let pos = cmp::min(*pos_mut, slice.len() as u64);
+    let amt = (&mut slice[(pos as usize)..]).write(buf)?;
+    *pos_mut += amt as u64;
+    Ok(amt)
+}
+
+#[inline]
+fn slice_write_vectored(
+    pos_mut: &mut u64,
+    slice: &mut [u8],
+    bufs: &[IoSlice<'_>],
+) -> io::Result<usize> {
+    let mut nwritten = 0;
+    for buf in bufs {
+        let n = slice_write(pos_mut, slice, buf)?;
+        nwritten += n;
+        if n < buf.len() {
+            break;
+        }
+    }
+    Ok(nwritten)
+}
+
+// Resizing write implementation
+fn vec_write(pos_mut: &mut u64, vec: &mut Vec<u8>, buf: &[u8]) -> io::Result<usize> {
+    let pos: usize = (*pos_mut).try_into().map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidInput,
+            "cursor position exceeds maximum possible vector length",
+        )
+    })?;
+    // Make sure the internal buffer is as least as big as where we
+    // currently are
+    let len = vec.len();
+    if len < pos {
+        // use `resize` so that the zero filling is as efficient as possible
+        vec.resize(pos, 0);
+    }
+    // Figure out what bytes will be used to overwrite what's currently
+    // there (left), and what will be appended on the end (right)
+    {
+        let space = vec.len() - pos;
+        let (left, right) = buf.split_at(cmp::min(space, buf.len()));
+        vec[pos..pos + left.len()].copy_from_slice(left);
+        vec.extend_from_slice(right);
+    }
+
+    // Bump us forward
+    *pos_mut = (pos + buf.len()) as u64;
+    Ok(buf.len())
+}
+
+fn vec_write_vectored(
+    pos_mut: &mut u64,
+    vec: &mut Vec<u8>,
+    bufs: &[IoSlice<'_>],
+) -> io::Result<usize> {
+    let mut nwritten = 0;
+    for buf in bufs {
+        nwritten += vec_write(pos_mut, vec, buf)?;
+    }
+    Ok(nwritten)
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> Write for Cursor<&'a mut [u8]> {
+impl Write for Cursor<&mut [u8]> {
     #[inline]
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        let pos = cmp::min(self.pos, self.inner.len() as u64);
-        let amt = (&mut self.inner[(pos as usize)..]).write(data)?;
-        self.pos += amt as u64;
-        Ok(amt)
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        slice_write(&mut self.pos, self.inner, buf)
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+
+    #[inline]
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        slice_write_vectored(&mut self.pos, self.inner, bufs)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[stable(feature = "cursor_mut_vec", since = "1.25.0")]
+impl Write for Cursor<&mut Vec<u8>> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        vec_write(&mut self.pos, self.inner, buf)
+    }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        vec_write_vectored(&mut self.pos, self.inner, bufs)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Write for Cursor<Vec<u8>> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let pos: usize = self.position().try_into().map_err(|_| {
-            Error::new(ErrorKind::InvalidInput,
-                       "cursor position exceeds maximum possible vector length")
-        })?;
-        // Make sure the internal buffer is as least as big as where we
-        // currently are
-        let len = self.inner.len();
-        if len < pos {
-            // use `resize` so that the zero filling is as efficient as possible
-            self.inner.resize(pos, 0);
-        }
-        // Figure out what bytes will be used to overwrite what's currently
-        // there (left), and what will be appended on the end (right)
-        {
-            let space = self.inner.len() - pos;
-            let (left, right) = buf.split_at(cmp::min(space, buf.len()));
-            self.inner[pos..pos + left.len()].copy_from_slice(left);
-            self.inner.extend_from_slice(right);
-        }
-
-        // Bump us forward
-        self.set_position((pos + buf.len()) as u64);
-        Ok(buf.len())
+        vec_write(&mut self.pos, &mut self.inner, buf)
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        vec_write_vectored(&mut self.pos, &mut self.inner, bufs)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[stable(feature = "cursor_box_slice", since = "1.5.0")]
 impl Write for Cursor<Box<[u8]>> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let pos = cmp::min(self.pos, self.inner.len() as u64);
-        let amt = (&mut self.inner[(pos as usize)..]).write(buf)?;
-        self.pos += amt as u64;
-        Ok(amt)
+        slice_write(&mut self.pos, &mut self.inner, buf)
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+
+    #[inline]
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        slice_write_vectored(&mut self.pos, &mut self.inner, bufs)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use io::prelude::*;
-    use io::{Cursor, SeekFrom};
+    use crate::io::prelude::*;
+    use crate::io::{Cursor, IoSlice, IoSliceMut, SeekFrom};
 
     #[test]
     fn test_vec_writer() {
@@ -305,7 +439,13 @@ mod tests {
         assert_eq!(writer.write(&[0]).unwrap(), 1);
         assert_eq!(writer.write(&[1, 2, 3]).unwrap(), 3);
         assert_eq!(writer.write(&[4, 5, 6, 7]).unwrap(), 4);
-        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(
+            writer
+                .write_vectored(&[IoSlice::new(&[]), IoSlice::new(&[8, 9]), IoSlice::new(&[10])],)
+                .unwrap(),
+            3
+        );
+        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(writer, b);
     }
 
@@ -315,7 +455,30 @@ mod tests {
         assert_eq!(writer.write(&[0]).unwrap(), 1);
         assert_eq!(writer.write(&[1, 2, 3]).unwrap(), 3);
         assert_eq!(writer.write(&[4, 5, 6, 7]).unwrap(), 4);
-        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(
+            writer
+                .write_vectored(&[IoSlice::new(&[]), IoSlice::new(&[8, 9]), IoSlice::new(&[10])],)
+                .unwrap(),
+            3
+        );
+        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        assert_eq!(&writer.get_ref()[..], b);
+    }
+
+    #[test]
+    fn test_mem_mut_writer() {
+        let mut vec = Vec::new();
+        let mut writer = Cursor::new(&mut vec);
+        assert_eq!(writer.write(&[0]).unwrap(), 1);
+        assert_eq!(writer.write(&[1, 2, 3]).unwrap(), 3);
+        assert_eq!(writer.write(&[4, 5, 6, 7]).unwrap(), 4);
+        assert_eq!(
+            writer
+                .write_vectored(&[IoSlice::new(&[]), IoSlice::new(&[8, 9]), IoSlice::new(&[10])],)
+                .unwrap(),
+            3
+        );
+        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(&writer.get_ref()[..], b);
     }
 
@@ -338,6 +501,28 @@ mod tests {
     }
 
     #[test]
+    fn test_box_slice_writer_vectored() {
+        let mut writer = Cursor::new(vec![0u8; 9].into_boxed_slice());
+        assert_eq!(writer.position(), 0);
+        assert_eq!(writer.write_vectored(&[IoSlice::new(&[0])]).unwrap(), 1);
+        assert_eq!(writer.position(), 1);
+        assert_eq!(
+            writer
+                .write_vectored(&[IoSlice::new(&[1, 2, 3]), IoSlice::new(&[4, 5, 6, 7]),])
+                .unwrap(),
+            7,
+        );
+        assert_eq!(writer.position(), 8);
+        assert_eq!(writer.write_vectored(&[]).unwrap(), 0);
+        assert_eq!(writer.position(), 8);
+
+        assert_eq!(writer.write_vectored(&[IoSlice::new(&[8, 9])]).unwrap(), 1);
+        assert_eq!(writer.write_vectored(&[IoSlice::new(&[10])]).unwrap(), 0);
+        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(&**writer.get_ref(), b);
+    }
+
+    #[test]
     fn test_buf_writer() {
         let mut buf = [0 as u8; 9];
         {
@@ -353,6 +538,31 @@ mod tests {
 
             assert_eq!(writer.write(&[8, 9]).unwrap(), 1);
             assert_eq!(writer.write(&[10]).unwrap(), 0);
+        }
+        let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(buf, b);
+    }
+
+    #[test]
+    fn test_buf_writer_vectored() {
+        let mut buf = [0 as u8; 9];
+        {
+            let mut writer = Cursor::new(&mut buf[..]);
+            assert_eq!(writer.position(), 0);
+            assert_eq!(writer.write_vectored(&[IoSlice::new(&[0])]).unwrap(), 1);
+            assert_eq!(writer.position(), 1);
+            assert_eq!(
+                writer
+                    .write_vectored(&[IoSlice::new(&[1, 2, 3]), IoSlice::new(&[4, 5, 6, 7])],)
+                    .unwrap(),
+                7,
+            );
+            assert_eq!(writer.position(), 8);
+            assert_eq!(writer.write_vectored(&[]).unwrap(), 0);
+            assert_eq!(writer.position(), 8);
+
+            assert_eq!(writer.write_vectored(&[IoSlice::new(&[8, 9])]).unwrap(), 1);
+            assert_eq!(writer.write_vectored(&[IoSlice::new(&[10])]).unwrap(), 0);
         }
         let b: &[_] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
         assert_eq!(buf, b);
@@ -381,7 +591,6 @@ mod tests {
             assert_eq!(writer.position(), 7);
             assert_eq!(writer.write(&[4]).unwrap(), 1);
             assert_eq!(writer.position(), 8);
-
         }
         let b: &[_] = &[1, 3, 2, 0, 0, 0, 0, 4];
         assert_eq!(buf, b);
@@ -419,6 +628,37 @@ mod tests {
     }
 
     #[test]
+    fn test_mem_reader_vectored() {
+        let mut reader = Cursor::new(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let mut buf = [];
+        assert_eq!(reader.read_vectored(&mut [IoSliceMut::new(&mut buf)]).unwrap(), 0);
+        assert_eq!(reader.position(), 0);
+        let mut buf = [0];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut []), IoSliceMut::new(&mut buf),])
+                .unwrap(),
+            1,
+        );
+        assert_eq!(reader.position(), 1);
+        let b: &[_] = &[0];
+        assert_eq!(buf, b);
+        let mut buf1 = [0; 4];
+        let mut buf2 = [0; 4];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut buf1), IoSliceMut::new(&mut buf2),])
+                .unwrap(),
+            7,
+        );
+        let b1: &[_] = &[1, 2, 3, 4];
+        let b2: &[_] = &[5, 6, 7];
+        assert_eq!(buf1, b1);
+        assert_eq!(&buf2[..3], b2);
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
     fn test_boxed_slice_reader() {
         let mut reader = Cursor::new(vec![0, 1, 2, 3, 4, 5, 6, 7].into_boxed_slice());
         let mut buf = [];
@@ -441,6 +681,37 @@ mod tests {
     }
 
     #[test]
+    fn test_boxed_slice_reader_vectored() {
+        let mut reader = Cursor::new(vec![0, 1, 2, 3, 4, 5, 6, 7].into_boxed_slice());
+        let mut buf = [];
+        assert_eq!(reader.read_vectored(&mut [IoSliceMut::new(&mut buf)]).unwrap(), 0);
+        assert_eq!(reader.position(), 0);
+        let mut buf = [0];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut []), IoSliceMut::new(&mut buf),])
+                .unwrap(),
+            1,
+        );
+        assert_eq!(reader.position(), 1);
+        let b: &[_] = &[0];
+        assert_eq!(buf, b);
+        let mut buf1 = [0; 4];
+        let mut buf2 = [0; 4];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut buf1), IoSliceMut::new(&mut buf2)],)
+                .unwrap(),
+            7,
+        );
+        let b1: &[_] = &[1, 2, 3, 4];
+        let b2: &[_] = &[5, 6, 7];
+        assert_eq!(buf1, b1);
+        assert_eq!(&buf2[..3], b2);
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
     fn read_to_end() {
         let mut reader = Cursor::new(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let mut v = Vec::new();
@@ -451,7 +722,7 @@ mod tests {
     #[test]
     fn test_slice_reader() {
         let in_buf = vec![0, 1, 2, 3, 4, 5, 6, 7];
-        let mut reader = &mut &in_buf[..];
+        let reader = &mut &in_buf[..];
         let mut buf = [];
         assert_eq!(reader.read(&mut buf).unwrap(), 0);
         let mut buf = [0];
@@ -468,6 +739,55 @@ mod tests {
         let b: &[_] = &[5, 6, 7];
         assert_eq!(&buf[..3], b);
         assert_eq!(reader.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_slice_reader_vectored() {
+        let in_buf = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let reader = &mut &in_buf[..];
+        let mut buf = [];
+        assert_eq!(reader.read_vectored(&mut [IoSliceMut::new(&mut buf)]).unwrap(), 0);
+        let mut buf = [0];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut []), IoSliceMut::new(&mut buf),])
+                .unwrap(),
+            1,
+        );
+        assert_eq!(reader.len(), 7);
+        let b: &[_] = &[0];
+        assert_eq!(buf, b);
+        let mut buf1 = [0; 4];
+        let mut buf2 = [0; 4];
+        assert_eq!(
+            reader
+                .read_vectored(&mut [IoSliceMut::new(&mut buf1), IoSliceMut::new(&mut buf2)],)
+                .unwrap(),
+            7,
+        );
+        let b1: &[_] = &[1, 2, 3, 4];
+        let b2: &[_] = &[5, 6, 7];
+        assert_eq!(buf1, b1);
+        assert_eq!(&buf2[..3], b2);
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_read_exact() {
+        let in_buf = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let reader = &mut &in_buf[..];
+        let mut buf = [];
+        assert!(reader.read_exact(&mut buf).is_ok());
+        let mut buf = [8];
+        assert!(reader.read_exact(&mut buf).is_ok());
+        assert_eq!(buf[0], 0);
+        assert_eq!(reader.len(), 7);
+        let mut buf = [0, 0, 0, 0, 0, 0, 0];
+        assert!(reader.read_exact(&mut buf).is_ok());
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(reader.len(), 0);
+        let mut buf = [0];
+        assert!(reader.read_exact(&mut buf).is_err());
     }
 
     #[test]
@@ -491,24 +811,6 @@ mod tests {
         let b: &[_] = &[5, 6, 7];
         assert_eq!(&buf[..3], b);
         assert_eq!(reader.read(&mut buf).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_read_char() {
-        let b = &b"Vi\xE1\xBB\x87t"[..];
-        let mut c = Cursor::new(b).chars();
-        assert_eq!(c.next().unwrap().unwrap(), 'V');
-        assert_eq!(c.next().unwrap().unwrap(), 'i');
-        assert_eq!(c.next().unwrap().unwrap(), 'ệ');
-        assert_eq!(c.next().unwrap().unwrap(), 't');
-        assert!(c.next().is_none());
-    }
-
-    #[test]
-    fn test_read_bad_char() {
-        let b = &b"\x80"[..];
-        let mut c = Cursor::new(b).chars();
-        assert!(c.next().unwrap().is_err());
     }
 
     #[test]
@@ -639,5 +941,17 @@ mod tests {
         let mut c = Cursor::new(Vec::new());
         c.set_position(<usize>::max_value() as u64 + 1);
         assert!(c.write_all(&[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        assert_eq!(Cursor::new(Vec::<u8>::new()), Cursor::new(Vec::<u8>::new()));
+    }
+
+    #[test]
+    fn test_eq() {
+        struct AssertEq<T: Eq>(pub T);
+
+        let _: AssertEq<Cursor<Vec<u8>>> = AssertEq(Cursor::new(Vec::new()));
     }
 }

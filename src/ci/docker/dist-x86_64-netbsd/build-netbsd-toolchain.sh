@@ -1,14 +1,4 @@
-#!/bin/bash
-# Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
-
+#!/usr/bin/env bash
 # ignore-tidy-linelength
 
 set -ex
@@ -35,26 +25,26 @@ cd netbsd
 
 mkdir -p /x-tools/x86_64-unknown-netbsd/sysroot
 
-URL=https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror
+URL=https://ci-mirrors.rust-lang.org/rustc
 
 # Originally from ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-$BSD/source/sets/*.tgz
-curl $URL/2017-03-17-netbsd-src.tgz | tar xzf -
-curl $URL/2017-03-17-netbsd-gnusrc.tgz | tar xzf -
-curl $URL/2017-03-17-netbsd-sharesrc.tgz | tar xzf -
-curl $URL/2017-03-17-netbsd-syssrc.tgz | tar xzf -
+curl $URL/2018-03-01-netbsd-src.tgz | tar xzf -
+curl $URL/2018-03-01-netbsd-gnusrc.tgz | tar xzf -
+curl $URL/2018-03-01-netbsd-sharesrc.tgz | tar xzf -
+curl $URL/2018-03-01-netbsd-syssrc.tgz | tar xzf -
 
 # Originally from ftp://ftp.netbsd.org/pub/NetBSD/NetBSD-$BSD/amd64/binary/sets/*.tgz
-curl $URL/2017-03-17-netbsd-base.tgz | \
+curl $URL/2018-03-01-netbsd-base.tgz | \
   tar xzf - -C /x-tools/x86_64-unknown-netbsd/sysroot ./usr/include ./usr/lib ./lib
-curl $URL/2017-03-17-netbsd-comp.tgz | \
+curl $URL/2018-03-01-netbsd-comp.tgz | \
   tar xzf - -C /x-tools/x86_64-unknown-netbsd/sysroot ./usr/include ./usr/lib
 
 cd usr/src
 
 # The options, in order, do the following
-# * this is an unpriviledged build
+# * this is an unprivileged build
 # * output to a predictable location
-# * disable various uneeded stuff
+# * disable various unneeded stuff
 MKUNPRIVED=yes TOOLDIR=/x-tools/x86_64-unknown-netbsd \
 MKSHARE=no MKDOC=no MKHTML=no MKINFO=no MKKMOD=no MKLINT=no MKMAN=no MKNLS=no MKPROFILE=no \
 hide_output ./build.sh -j10 -m amd64 tools
@@ -64,12 +54,12 @@ cd ../..
 rm -rf usr
 
 cat > /x-tools/x86_64-unknown-netbsd/bin/x86_64--netbsd-gcc-sysroot <<'EOF'
-#!/bin/bash
+#!/usr/bin/env bash
 exec /x-tools/x86_64-unknown-netbsd/bin/x86_64--netbsd-gcc --sysroot=/x-tools/x86_64-unknown-netbsd/sysroot "$@"
 EOF
 
 cat > /x-tools/x86_64-unknown-netbsd/bin/x86_64--netbsd-g++-sysroot <<'EOF'
-#!/bin/bash
+#!/usr/bin/env bash
 exec /x-tools/x86_64-unknown-netbsd/bin/x86_64--netbsd-g++ --sysroot=/x-tools/x86_64-unknown-netbsd/sysroot "$@"
 EOF
 

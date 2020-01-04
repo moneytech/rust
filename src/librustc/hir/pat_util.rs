@@ -1,19 +1,8 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use hir::def::Def;
-use hir::def_id::DefId;
-use hir::{self, PatKind};
+use crate::hir::def::{CtorOf, DefKind, Res};
+use crate::hir::def_id::DefId;
+use crate::hir::{self, HirId, PatKind};
+use rustc_span::Span;
 use syntax::ast;
-use syntax::codemap::Spanned;
-use syntax_pos::Span;
 
 use std::iter::{Enumerate, ExactSizeIterator};
 
@@ -23,171 +12,178 @@ pub struct EnumerateAndAdjust<I> {
     gap_len: usize,
 }
 
-impl<I> Iterator for EnumerateAndAdjust<I> where I: Iterator {
+impl<I> Iterator for EnumerateAndAdjust<I>
+where
+    I: Iterator,
+{
     type Item = (usize, <I as Iterator>::Item);
 
     fn next(&mut self) -> Option<(usize, <I as Iterator>::Item)> {
-        self.enumerate.next().map(|(i, elem)| {
-            (if i < self.gap_pos { i } else { i + self.gap_len }, elem)
-        })
+        self.enumerate
+            .next()
+            .map(|(i, elem)| (if i < self.gap_pos { i } else { i + self.gap_len }, elem))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.enumerate.size_hint()
     }
 }
 
 pub trait EnumerateAndAdjustIterator {
-    fn enumerate_and_adjust(self, expected_len: usize, gap_pos: Option<usize>)
-        -> EnumerateAndAdjust<Self> where Self: Sized;
+    fn enumerate_and_adjust(
+        self,
+        expected_len: usize,
+        gap_pos: Option<usize>,
+    ) -> EnumerateAndAdjust<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: ExactSizeIterator> EnumerateAndAdjustIterator for T {
-    fn enumerate_and_adjust(self, expected_len: usize, gap_pos: Option<usize>)
-            -> EnumerateAndAdjust<Self> where Self: Sized {
+    fn enumerate_and_adjust(
+        self,
+        expected_len: usize,
+        gap_pos: Option<usize>,
+    ) -> EnumerateAndAdjust<Self>
+    where
+        Self: Sized,
+    {
         let actual_len = self.len();
         EnumerateAndAdjust {
             enumerate: self.enumerate(),
-            gap_pos: if let Some(gap_pos) = gap_pos { gap_pos } else { expected_len },
+            gap_pos: gap_pos.unwrap_or(expected_len),
             gap_len: expected_len - actual_len,
         }
     }
 }
 
-impl hir::Pat {
+impl hir::Pat<'_> {
     pub fn is_refutable(&self) -> bool {
-        match self.node {
-            PatKind::Lit(_) |
-            PatKind::Range(..) |
-            PatKind::Path(hir::QPath::Resolved(Some(..), _)) |
-            PatKind::Path(hir::QPath::TypeRelative(..)) => true,
+        match self.kind {
+            PatKind::Lit(_)
+            | PatKind::Range(..)
+            | PatKind::Path(hir::QPath::Resolved(Some(..), _))
+            | PatKind::Path(hir::QPath::TypeRelative(..)) => true,
 
-            PatKind::Path(hir::QPath::Resolved(_, ref path)) |
-            PatKind::TupleStruct(hir::QPath::Resolved(_, ref path), ..) |
-            PatKind::Struct(hir::QPath::Resolved(_, ref path), ..) => {
-                match path.def {
-                    Def::Variant(..) | Def::VariantCtor(..) => true,
-                    _ => false
-                }
-            }
+            PatKind::Path(hir::QPath::Resolved(_, ref path))
+            | PatKind::TupleStruct(hir::QPath::Resolved(_, ref path), ..)
+            | PatKind::Struct(hir::QPath::Resolved(_, ref path), ..) => match path.res {
+                Res::Def(DefKind::Variant, _) => true,
+                _ => false,
+            },
             PatKind::Slice(..) => true,
-            _ => false
-        }
-    }
-
-    pub fn is_const(&self) -> bool {
-        match self.node {
-            PatKind::Path(hir::QPath::TypeRelative(..)) => true,
-            PatKind::Path(hir::QPath::Resolved(_, ref path)) => {
-                match path.def {
-                    Def::Const(..) | Def::AssociatedConst(..) => true,
-                    _ => false
-                }
-            }
-            _ => false
+            _ => false,
         }
     }
 
     /// Call `f` on every "binding" in a pattern, e.g., on `a` in
     /// `match foo() { Some(a) => (), None => () }`
-    pub fn each_binding<F>(&self, mut f: F)
-        where F: FnMut(hir::BindingMode, ast::NodeId, Span, &Spanned<ast::Name>),
-    {
-        self.walk(|p| {
-            if let PatKind::Binding(binding_mode, _, ref pth, _) = p.node {
-                f(binding_mode, p.id, p.span, pth);
+    pub fn each_binding(&self, mut f: impl FnMut(hir::BindingAnnotation, HirId, Span, ast::Ident)) {
+        self.walk_always(|p| {
+            if let PatKind::Binding(binding_mode, _, ident, _) = p.kind {
+                f(binding_mode, p.hir_id, p.span, ident);
             }
-            true
         });
     }
 
+    /// Call `f` on every "binding" in a pattern, e.g., on `a` in
+    /// `match foo() { Some(a) => (), None => () }`.
+    ///
+    /// When encountering an or-pattern `p_0 | ... | p_n` only `p_0` will be visited.
+    pub fn each_binding_or_first(
+        &self,
+        f: &mut impl FnMut(hir::BindingAnnotation, HirId, Span, ast::Ident),
+    ) {
+        self.walk(|p| match &p.kind {
+            PatKind::Or(ps) => {
+                ps[0].each_binding_or_first(f);
+                false
+            }
+            PatKind::Binding(bm, _, ident, _) => {
+                f(*bm, p.hir_id, p.span, *ident);
+                true
+            }
+            _ => true,
+        })
+    }
+
     /// Checks if the pattern contains any patterns that bind something to
-    /// an ident, e.g. `foo`, or `Foo(foo)` or `foo @ Bar(..)`.
+    /// an ident, e.g., `foo`, or `Foo(foo)` or `foo @ Bar(..)`.
     pub fn contains_bindings(&self) -> bool {
-        let mut contains_bindings = false;
-        self.walk(|p| {
-            if let PatKind::Binding(..) = p.node {
-                contains_bindings = true;
-                false // there's at least one binding, can short circuit now.
+        self.satisfies(|p| match p.kind {
+            PatKind::Binding(..) => true,
+            _ => false,
+        })
+    }
+
+    /// Checks if the pattern contains any patterns that bind something to
+    /// an ident or wildcard, e.g., `foo`, or `Foo(_)`, `foo @ Bar(..)`,
+    pub fn contains_bindings_or_wild(&self) -> bool {
+        self.satisfies(|p| match p.kind {
+            PatKind::Binding(..) | PatKind::Wild => true,
+            _ => false,
+        })
+    }
+
+    /// Checks if the pattern satisfies the given predicate on some sub-pattern.
+    fn satisfies(&self, pred: impl Fn(&hir::Pat<'_>) -> bool) -> bool {
+        let mut satisfies = false;
+        self.walk_short(|p| {
+            if pred(p) {
+                satisfies = true;
+                false // Found one, can short circuit now.
             } else {
                 true
             }
         });
-        contains_bindings
+        satisfies
     }
 
-    /// Checks if the pattern contains any patterns that bind something to
-    /// an ident or wildcard, e.g. `foo`, or `Foo(_)`, `foo @ Bar(..)`,
-    pub fn contains_bindings_or_wild(&self) -> bool {
-        let mut contains_bindings = false;
-        self.walk(|p| {
-            match p.node {
-                PatKind::Binding(..) | PatKind::Wild => {
-                    contains_bindings = true;
-                    false // there's at least one binding/wildcard, can short circuit now.
-                }
-                _ => true
-            }
-        });
-        contains_bindings
-    }
-
-    pub fn simple_name(&self) -> Option<ast::Name> {
-        match self.node {
-            PatKind::Binding(hir::BindByValue(..), _, ref path1, None) => {
-                Some(path1.node)
-            }
-            _ => {
-                None
-            }
+    pub fn simple_ident(&self) -> Option<ast::Ident> {
+        match self.kind {
+            PatKind::Binding(hir::BindingAnnotation::Unannotated, _, ident, None)
+            | PatKind::Binding(hir::BindingAnnotation::Mutable, _, ident, None) => Some(ident),
+            _ => None,
         }
     }
 
-    /// Return variants that are necessary to exist for the pattern to match.
+    /// Returns variants that are necessary to exist for the pattern to match.
     pub fn necessary_variants(&self) -> Vec<DefId> {
         let mut variants = vec![];
-        self.walk(|p| {
-            match p.node {
-                PatKind::Path(hir::QPath::Resolved(_, ref path)) |
-                PatKind::TupleStruct(hir::QPath::Resolved(_, ref path), ..) |
-                PatKind::Struct(hir::QPath::Resolved(_, ref path), ..) => {
-                    match path.def {
-                        Def::Variant(id) |
-                        Def::VariantCtor(id, ..) => variants.push(id),
-                        _ => ()
-                    }
+        self.walk(|p| match &p.kind {
+            PatKind::Or(_) => false,
+            PatKind::Path(hir::QPath::Resolved(_, path))
+            | PatKind::TupleStruct(hir::QPath::Resolved(_, path), ..)
+            | PatKind::Struct(hir::QPath::Resolved(_, path), ..) => {
+                if let Res::Def(DefKind::Variant, id)
+                | Res::Def(DefKind::Ctor(CtorOf::Variant, ..), id) = path.res
+                {
+                    variants.push(id);
                 }
-                _ => ()
+                true
             }
-            true
+            _ => true,
         });
         variants.sort();
         variants.dedup();
         variants
     }
 
-    /// Checks if the pattern contains any `ref` or `ref mut` bindings,
-    /// and if yes whether its containing mutable ones or just immutables ones.
-    pub fn contains_ref_binding(&self) -> Option<hir::Mutability> {
+    /// Checks if the pattern contains any `ref` or `ref mut` bindings, and if
+    /// yes whether it contains mutable or just immutables ones.
+    //
+    // FIXME(tschottdorf): this is problematic as the HIR is being scraped, but
+    // ref bindings are be implicit after #42640 (default match binding modes). See issue #44848.
+    pub fn contains_explicit_ref_binding(&self) -> Option<hir::Mutability> {
         let mut result = None;
-        self.each_binding(|mode, _, _, _| {
-            if let hir::BindingMode::BindByRef(m) = mode {
-                // Pick Mutable as maximum
-                match result {
-                    None | Some(hir::MutImmutable) => result = Some(m),
-                    _ => (),
-                }
-            }
+        self.each_binding(|annotation, _, _, _| match annotation {
+            hir::BindingAnnotation::Ref => match result {
+                None | Some(hir::Mutability::Not) => result = Some(hir::Mutability::Not),
+                _ => {}
+            },
+            hir::BindingAnnotation::RefMut => result = Some(hir::Mutability::Mut),
+            _ => {}
         });
         result
-    }
-}
-
-impl hir::Arm {
-    /// Checks if the patterns for this arm contain any `ref` or `ref mut`
-    /// bindings, and if yes whether its containing mutable ones or just immutables ones.
-    pub fn contains_ref_binding(&self) -> Option<hir::Mutability> {
-        self.pats.iter()
-                 .filter_map(|pat| pat.contains_ref_binding())
-                 .max_by_key(|m| match *m {
-                    hir::MutMutable => 1,
-                    hir::MutImmutable => 0,
-                 })
     }
 }

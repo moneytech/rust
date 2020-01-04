@@ -1,46 +1,12 @@
-// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Code for annotating snippets.
 
-use syntax_pos::{Span, FileMap};
-use CodeMapper;
-use std::rc::Rc;
-use Level;
-
-#[derive(Clone)]
-pub struct SnippetData {
-    codemap: Rc<CodeMapper>,
-    files: Vec<FileInfo>,
-}
-
-#[derive(Clone)]
-pub struct FileInfo {
-    file: Rc<FileMap>,
-
-    /// The "primary file", if any, gets a `-->` marker instead of
-    /// `>>>`, and has a line-number/column printed and not just a
-    /// filename.  It appears first in the listing. It is known to
-    /// contain at least one primary span, though primary spans (which
-    /// are designated with `^^^`) may also occur in other files.
-    primary_span: Option<Span>,
-
-    lines: Vec<Line>,
-}
+use crate::Level;
 
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub struct Line {
     pub line_index: usize,
     pub annotations: Vec<Annotation>,
 }
-
 
 #[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub struct MultilineAnnotation {
@@ -51,11 +17,20 @@ pub struct MultilineAnnotation {
     pub end_col: usize,
     pub is_primary: bool,
     pub label: Option<String>,
+    pub overlaps_exactly: bool,
 }
 
 impl MultilineAnnotation {
     pub fn increase_depth(&mut self) {
         self.depth += 1;
+    }
+
+    /// Compare two `MultilineAnnotation`s considering only the `Span` they cover.
+    pub fn same_span(&self, other: &MultilineAnnotation) -> bool {
+        self.line_start == other.line_start
+            && self.line_end == other.line_end
+            && self.start_col == other.start_col
+            && self.end_col == other.end_col
     }
 
     pub fn as_start(&self) -> Annotation {
@@ -64,17 +39,17 @@ impl MultilineAnnotation {
             end_col: self.start_col + 1,
             is_primary: self.is_primary,
             label: None,
-            annotation_type: AnnotationType::MultilineStart(self.depth)
+            annotation_type: AnnotationType::MultilineStart(self.depth),
         }
     }
 
     pub fn as_end(&self) -> Annotation {
         Annotation {
-            start_col: self.end_col - 1,
+            start_col: self.end_col.saturating_sub(1),
             end_col: self.end_col,
             is_primary: self.is_primary,
             label: self.label.clone(),
-            annotation_type: AnnotationType::MultilineEnd(self.depth)
+            annotation_type: AnnotationType::MultilineEnd(self.depth),
         }
     }
 
@@ -84,7 +59,7 @@ impl MultilineAnnotation {
             end_col: 0,
             is_primary: self.is_primary,
             label: None,
-            annotation_type: AnnotationType::MultilineLine(self.depth)
+            annotation_type: AnnotationType::MultilineLine(self.depth),
         }
     }
 }
@@ -141,21 +116,17 @@ pub struct Annotation {
 }
 
 impl Annotation {
-    /// Wether this annotation is a vertical line placeholder.
+    /// Whether this annotation is a vertical line placeholder.
     pub fn is_line(&self) -> bool {
-        if let AnnotationType::MultilineLine(_) = self.annotation_type {
-            true
-        } else {
-            false
-        }
+        if let AnnotationType::MultilineLine(_) = self.annotation_type { true } else { false }
     }
 
     pub fn is_multiline(&self) -> bool {
         match self.annotation_type {
-            AnnotationType::Multiline(_) |
-            AnnotationType::MultilineStart(_) |
-            AnnotationType::MultilineLine(_) |
-            AnnotationType::MultilineEnd(_) => true,
+            AnnotationType::Multiline(_)
+            | AnnotationType::MultilineStart(_)
+            | AnnotationType::MultilineLine(_)
+            | AnnotationType::MultilineEnd(_) => true,
             _ => false,
         }
     }
@@ -190,8 +161,7 @@ impl Annotation {
     pub fn takes_space(&self) -> bool {
         // Multiline annotations always have to keep vertical space.
         match self.annotation_type {
-            AnnotationType::MultilineStart(_) |
-            AnnotationType::MultilineEnd(_) => true,
+            AnnotationType::MultilineStart(_) | AnnotationType::MultilineEnd(_) => true,
             _ => false,
         }
     }
@@ -203,10 +173,10 @@ pub struct StyledString {
     pub style: Style,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, Debug, PartialEq, Hash, RustcEncodable, RustcDecodable)]
 pub enum Style {
+    MainHeaderMsg,
     HeaderMsg,
-    FileNameStyle,
     LineAndColumn,
     LineNumber,
     Quotation,
@@ -214,10 +184,7 @@ pub enum Style {
     UnderlineSecondary,
     LabelPrimary,
     LabelSecondary,
-    OldSchoolNoteText,
-    OldSchoolNote,
     NoStyle,
-    ErrorCode,
     Level(Level),
     Highlight,
 }

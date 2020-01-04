@@ -1,30 +1,25 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use fmt;
-use hash;
-use io;
-use mem;
-use net::{lookup_host, ntoh, hton, IpAddr, Ipv4Addr, Ipv6Addr};
-use option;
-use sys::net::netc as c;
-use sys_common::{FromInner, AsInner, IntoInner};
-use vec;
-use iter;
-use slice;
+use crate::convert::TryInto;
+use crate::fmt;
+use crate::hash;
+use crate::io;
+use crate::iter;
+use crate::mem;
+use crate::net::{htons, ntohs, IpAddr, Ipv4Addr, Ipv6Addr};
+use crate::option;
+use crate::slice;
+use crate::sys::net::netc as c;
+use crate::sys_common::net::LookupHost;
+use crate::sys_common::{AsInner, FromInner, IntoInner};
+use crate::vec;
 
 /// An internet socket address, either IPv4 or IPv6.
 ///
 /// Internet socket addresses consist of an [IP address], a 16-bit port number, as well
 /// as possibly some version-dependent additional information. See [`SocketAddrV4`]'s and
 /// [`SocketAddrV6`]'s respective documentation for more details.
+///
+/// The size of a `SocketAddr` instance may vary depending on the target operating
+/// system.
 ///
 /// [IP address]: ../../std/net/enum.IpAddr.html
 /// [`SocketAddrV4`]: ../../std/net/struct.SocketAddrV4.html
@@ -59,6 +54,9 @@ pub enum SocketAddr {
 ///
 /// See [`SocketAddr`] for a type encompassing both IPv4 and IPv6 socket addresses.
 ///
+/// The size of a `SocketAddrV4` struct may vary depending on the target operating
+/// system.
+///
 /// [IETF RFC 793]: https://tools.ietf.org/html/rfc793
 /// [IPv4 address]: ../../std/net/struct.Ipv4Addr.html
 /// [`SocketAddr`]: ../../std/net/enum.SocketAddr.html
@@ -76,7 +74,9 @@ pub enum SocketAddr {
 /// ```
 #[derive(Copy)]
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct SocketAddrV4 { inner: c::sockaddr_in }
+pub struct SocketAddrV4 {
+    inner: c::sockaddr_in,
+}
 
 /// An IPv6 socket address.
 ///
@@ -85,6 +85,9 @@ pub struct SocketAddrV4 { inner: c::sockaddr_in }
 /// (see [IETF RFC 2553, Section 3.3] for more details).
 ///
 /// See [`SocketAddr`] for a type encompassing both IPv4 and IPv6 socket addresses.
+///
+/// The size of a `SocketAddrV6` struct may vary depending on the target operating
+/// system.
 ///
 /// [IETF RFC 2553, Section 3.3]: https://tools.ietf.org/html/rfc2553#section-3.3
 /// [IPv6 address]: ../../std/net/struct.Ipv6Addr.html
@@ -103,7 +106,9 @@ pub struct SocketAddrV4 { inner: c::sockaddr_in }
 /// ```
 #[derive(Copy)]
 #[stable(feature = "rust1", since = "1.0.0")]
-pub struct SocketAddrV6 { inner: c::sockaddr_in6 }
+pub struct SocketAddrV6 {
+    inner: c::sockaddr_in6,
+}
 
 impl SocketAddr {
     /// Creates a new socket address from an [IP address] and a port number.
@@ -216,11 +221,9 @@ impl SocketAddr {
     /// ```
     /// use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     ///
-    /// fn main() {
-    ///     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-    ///     assert_eq!(socket.is_ipv4(), true);
-    ///     assert_eq!(socket.is_ipv6(), false);
-    /// }
+    /// let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+    /// assert_eq!(socket.is_ipv4(), true);
+    /// assert_eq!(socket.is_ipv6(), false);
     /// ```
     #[stable(feature = "sockaddr_checker", since = "1.16.0")]
     pub fn is_ipv4(&self) -> bool {
@@ -243,12 +246,9 @@ impl SocketAddr {
     /// ```
     /// use std::net::{IpAddr, Ipv6Addr, SocketAddr};
     ///
-    /// fn main() {
-    ///     let socket = SocketAddr::new(
-    ///                      IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 65535, 0, 1)), 8080);
-    ///     assert_eq!(socket.is_ipv4(), false);
-    ///     assert_eq!(socket.is_ipv6(), true);
-    /// }
+    /// let socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 65535, 0, 1)), 8080);
+    /// assert_eq!(socket.is_ipv4(), false);
+    /// assert_eq!(socket.is_ipv6(), true);
     /// ```
     #[stable(feature = "sockaddr_checker", since = "1.16.0")]
     pub fn is_ipv6(&self) -> bool {
@@ -276,9 +276,9 @@ impl SocketAddrV4 {
         SocketAddrV4 {
             inner: c::sockaddr_in {
                 sin_family: c::AF_INET as c::sa_family_t,
-                sin_port: hton(port),
+                sin_port: htons(port),
                 sin_addr: *ip.as_inner(),
-                .. unsafe { mem::zeroed() }
+                ..unsafe { mem::zeroed() }
             },
         }
     }
@@ -295,9 +295,7 @@ impl SocketAddrV4 {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn ip(&self) -> &Ipv4Addr {
-        unsafe {
-            &*(&self.inner.sin_addr as *const c::in_addr as *const Ipv4Addr)
-        }
+        unsafe { &*(&self.inner.sin_addr as *const c::in_addr as *const Ipv4Addr) }
     }
 
     /// Changes the IP address associated with this socket address.
@@ -328,7 +326,7 @@ impl SocketAddrV4 {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn port(&self) -> u16 {
-        ntoh(self.inner.sin_port)
+        ntohs(self.inner.sin_port)
     }
 
     /// Changes the port number associated with this socket address.
@@ -344,7 +342,7 @@ impl SocketAddrV4 {
     /// ```
     #[stable(feature = "sockaddr_setters", since = "1.9.0")]
     pub fn set_port(&mut self, new_port: u16) {
-        self.inner.sin_port = hton(new_port);
+        self.inner.sin_port = htons(new_port);
     }
 }
 
@@ -366,16 +364,15 @@ impl SocketAddrV6 {
     /// let socket = SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 8080, 0, 0);
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn new(ip: Ipv6Addr, port: u16, flowinfo: u32, scope_id: u32)
-               -> SocketAddrV6 {
+    pub fn new(ip: Ipv6Addr, port: u16, flowinfo: u32, scope_id: u32) -> SocketAddrV6 {
         SocketAddrV6 {
             inner: c::sockaddr_in6 {
                 sin6_family: c::AF_INET6 as c::sa_family_t,
-                sin6_port: hton(port),
+                sin6_port: htons(port),
                 sin6_addr: *ip.as_inner(),
                 sin6_flowinfo: flowinfo,
                 sin6_scope_id: scope_id,
-                .. unsafe { mem::zeroed() }
+                ..unsafe { mem::zeroed() }
             },
         }
     }
@@ -392,9 +389,7 @@ impl SocketAddrV6 {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn ip(&self) -> &Ipv6Addr {
-        unsafe {
-            &*(&self.inner.sin6_addr as *const c::in6_addr as *const Ipv6Addr)
-        }
+        unsafe { &*(&self.inner.sin6_addr as *const c::in6_addr as *const Ipv6Addr) }
     }
 
     /// Changes the IP address associated with this socket address.
@@ -425,7 +420,7 @@ impl SocketAddrV6 {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn port(&self) -> u16 {
-        ntoh(self.inner.sin6_port)
+        ntohs(self.inner.sin6_port)
     }
 
     /// Changes the port number associated with this socket address.
@@ -441,7 +436,7 @@ impl SocketAddrV6 {
     /// ```
     #[stable(feature = "sockaddr_setters", since = "1.9.0")]
     pub fn set_port(&mut self, new_port: u16) {
-        self.inner.sin6_port = hton(new_port);
+        self.inner.sin6_port = htons(new_port);
     }
 
     /// Returns the flow information associated with this address.
@@ -509,7 +504,7 @@ impl SocketAddrV6 {
         self.inner.sin6_scope_id
     }
 
-    /// Change the scope ID associated with this socket address.
+    /// Changes the scope ID associated with this socket address.
     ///
     /// See the [`scope_id`] method's documentation for more details.
     ///
@@ -544,6 +539,10 @@ impl FromInner<c::sockaddr_in6> for SocketAddrV6 {
 
 #[stable(feature = "ip_from_ip", since = "1.16.0")]
 impl From<SocketAddrV4> for SocketAddr {
+    /// Converts a [`SocketAddrV4`] into a [`SocketAddr::V4`].
+    ///
+    /// [`SocketAddrV4`]: ../../std/net/struct.SocketAddrV4.html
+    /// [`SocketAddr::V4`]: ../../std/net/enum.SocketAddr.html#variant.V4
     fn from(sock4: SocketAddrV4) -> SocketAddr {
         SocketAddr::V4(sock4)
     }
@@ -551,6 +550,10 @@ impl From<SocketAddrV4> for SocketAddr {
 
 #[stable(feature = "ip_from_ip", since = "1.16.0")]
 impl From<SocketAddrV6> for SocketAddr {
+    /// Converts a [`SocketAddrV6`] into a [`SocketAddr::V6`].
+    ///
+    /// [`SocketAddrV6`]: ../../std/net/struct.SocketAddrV6.html
+    /// [`SocketAddr::V6`]: ../../std/net/enum.SocketAddr.html#variant.V6
     fn from(sock6: SocketAddrV6) -> SocketAddr {
         SocketAddr::V6(sock6)
     }
@@ -558,6 +561,19 @@ impl From<SocketAddrV6> for SocketAddr {
 
 #[stable(feature = "addr_from_into_ip", since = "1.17.0")]
 impl<I: Into<IpAddr>> From<(I, u16)> for SocketAddr {
+    /// Converts a tuple struct (Into<[`IpAddr`]>, `u16`) into a [`SocketAddr`].
+    ///
+    /// This conversion creates a [`SocketAddr::V4`] for a [`IpAddr::V4`]
+    /// and creates a [`SocketAddr::V6`] for a [`IpAddr::V6`].
+    ///
+    /// `u16` is treated as port of the newly created [`SocketAddr`].
+    ///
+    /// [`IpAddr`]: ../../std/net/enum.IpAddr.html
+    /// [`IpAddr::V4`]: ../../std/net/enum.IpAddr.html#variant.V4
+    /// [`IpAddr::V6`]: ../../std/net/enum.IpAddr.html#variant.V6
+    /// [`SocketAddr`]: ../../std/net/enum.SocketAddr.html
+    /// [`SocketAddr::V4`]: ../../std/net/enum.SocketAddr.html#variant.V4
+    /// [`SocketAddr::V6`]: ../../std/net/enum.SocketAddr.html#variant.V6
     fn from(pieces: (I, u16)) -> SocketAddr {
         SocketAddr::new(pieces.0.into(), pieces.1)
     }
@@ -578,7 +594,7 @@ impl<'a> IntoInner<(*const c::sockaddr, c::socklen_t)> for &'a SocketAddr {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for SocketAddr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             SocketAddr::V4(ref a) => a.fmt(f),
             SocketAddr::V6(ref a) => a.fmt(f),
@@ -588,55 +604,59 @@ impl fmt::Display for SocketAddr {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for SocketAddrV4 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.ip(), self.port())
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for SocketAddrV4 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, fmt)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Display for SocketAddrV6 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}]:{}", self.ip(), self.port())
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for SocketAddrV6 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, fmt)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Clone for SocketAddrV4 {
-    fn clone(&self) -> SocketAddrV4 { *self }
+    fn clone(&self) -> SocketAddrV4 {
+        *self
+    }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
 impl Clone for SocketAddrV6 {
-    fn clone(&self) -> SocketAddrV6 { *self }
+    fn clone(&self) -> SocketAddrV6 {
+        *self
+    }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl PartialEq for SocketAddrV4 {
     fn eq(&self, other: &SocketAddrV4) -> bool {
-        self.inner.sin_port == other.inner.sin_port &&
-            self.inner.sin_addr.s_addr == other.inner.sin_addr.s_addr
+        self.inner.sin_port == other.inner.sin_port
+            && self.inner.sin_addr.s_addr == other.inner.sin_addr.s_addr
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
 impl PartialEq for SocketAddrV6 {
     fn eq(&self, other: &SocketAddrV6) -> bool {
-        self.inner.sin6_port == other.inner.sin6_port &&
-            self.inner.sin6_addr.s6_addr == other.inner.sin6_addr.s6_addr &&
-            self.inner.sin6_flowinfo == other.inner.sin6_flowinfo &&
-            self.inner.sin6_scope_id == other.inner.sin6_scope_id
+        self.inner.sin6_port == other.inner.sin6_port
+            && self.inner.sin6_addr.s6_addr == other.inner.sin6_addr.s6_addr
+            && self.inner.sin6_flowinfo == other.inner.sin6_flowinfo
+            && self.inner.sin6_scope_id == other.inner.sin6_scope_id
     }
 }
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -653,8 +673,13 @@ impl hash::Hash for SocketAddrV4 {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl hash::Hash for SocketAddrV6 {
     fn hash<H: hash::Hasher>(&self, s: &mut H) {
-        (self.inner.sin6_port, &self.inner.sin6_addr.s6_addr,
-         self.inner.sin6_flowinfo, self.inner.sin6_scope_id).hash(s)
+        (
+            self.inner.sin6_port,
+            &self.inner.sin6_addr.s6_addr,
+            self.inner.sin6_flowinfo,
+            self.inner.sin6_scope_id,
+        )
+            .hash(s)
     }
 }
 
@@ -662,7 +687,7 @@ impl hash::Hash for SocketAddrV6 {
 /// [`SocketAddr`] values.
 ///
 /// This trait is used for generic address resolution when constructing network
-/// objects.  By default it is implemented for the following types:
+/// objects. By default it is implemented for the following types:
 ///
 ///  * [`SocketAddr`]: [`to_socket_addrs`] is the identity function.
 ///
@@ -684,7 +709,7 @@ impl hash::Hash for SocketAddrV6 {
 /// the other: for simple uses a string like `"localhost:12345"` is much nicer
 /// than manual construction of the corresponding [`SocketAddr`], but sometimes
 /// [`SocketAddr`] value is *the* main source of the address, and converting it to
-/// some other type (e.g. a string) just for it to be converted back to
+/// some other type (e.g., a string) just for it to be converted back to
 /// [`SocketAddr`] in constructor methods is pointless.
 ///
 /// Addresses returned by the operating system that are not IP addresses are
@@ -705,36 +730,80 @@ impl hash::Hash for SocketAddrV6 {
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use std::net::{SocketAddrV4, TcpStream, UdpSocket, TcpListener, Ipv4Addr};
+/// Creating a [`SocketAddr`] iterator that yields one item:
 ///
-/// fn main() {
-///     let ip = Ipv4Addr::new(127, 0, 0, 1);
-///     let port = 12345;
-///
-///     // The following lines are equivalent modulo possible "localhost" name
-///     // resolution differences
-///     let tcp_s = TcpStream::connect(SocketAddrV4::new(ip, port));
-///     let tcp_s = TcpStream::connect((ip, port));
-///     let tcp_s = TcpStream::connect(("127.0.0.1", port));
-///     let tcp_s = TcpStream::connect(("localhost", port));
-///     let tcp_s = TcpStream::connect("127.0.0.1:12345");
-///     let tcp_s = TcpStream::connect("localhost:12345");
-///
-///     // TcpListener::bind(), UdpSocket::bind() and UdpSocket::send_to()
-///     // behave similarly
-///     let tcp_l = TcpListener::bind("localhost:12345");
-///
-///     let mut udp_s = UdpSocket::bind(("127.0.0.1", port)).unwrap();
-///     udp_s.send_to(&[7], (ip, 23451)).unwrap();
-/// }
 /// ```
+/// use std::net::{ToSocketAddrs, SocketAddr};
+///
+/// let addr = SocketAddr::from(([127, 0, 0, 1], 443));
+/// let mut addrs_iter = addr.to_socket_addrs().unwrap();
+///
+/// assert_eq!(Some(addr), addrs_iter.next());
+/// assert!(addrs_iter.next().is_none());
+/// ```
+///
+/// Creating a [`SocketAddr`] iterator from a hostname:
+///
+/// ```no_run
+/// use std::net::{SocketAddr, ToSocketAddrs};
+///
+/// // assuming 'localhost' resolves to 127.0.0.1
+/// let mut addrs_iter = "localhost:443".to_socket_addrs().unwrap();
+/// assert_eq!(addrs_iter.next(), Some(SocketAddr::from(([127, 0, 0, 1], 443))));
+/// assert!(addrs_iter.next().is_none());
+///
+/// // assuming 'foo' does not resolve
+/// assert!("foo:443".to_socket_addrs().is_err());
+/// ```
+///
+/// Creating a [`SocketAddr`] iterator that yields multiple items:
+///
+/// ```
+/// use std::net::{SocketAddr, ToSocketAddrs};
+///
+/// let addr1 = SocketAddr::from(([0, 0, 0, 0], 80));
+/// let addr2 = SocketAddr::from(([127, 0, 0, 1], 443));
+/// let addrs = vec![addr1, addr2];
+///
+/// let mut addrs_iter = (&addrs[..]).to_socket_addrs().unwrap();
+///
+/// assert_eq!(Some(addr1), addrs_iter.next());
+/// assert_eq!(Some(addr2), addrs_iter.next());
+/// assert!(addrs_iter.next().is_none());
+/// ```
+///
+/// Attempting to create a [`SocketAddr`] iterator from an improperly formatted
+/// socket address `&str` (missing the port):
+///
+/// ```
+/// use std::io;
+/// use std::net::ToSocketAddrs;
+///
+/// let err = "127.0.0.1".to_socket_addrs().unwrap_err();
+/// assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+/// ```
+///
+/// [`TcpStream::connect`] is an example of an function that utilizes
+/// `ToSocketAddrs` as a trait bound on its parameter in order to accept
+/// different types:
+///
+/// ```no_run
+/// use std::net::{TcpStream, Ipv4Addr};
+///
+/// let stream = TcpStream::connect(("127.0.0.1", 443));
+/// // or
+/// let stream = TcpStream::connect("127.0.0.1:443");
+/// // or
+/// let stream = TcpStream::connect((Ipv4Addr::new(127, 0, 0, 1), 443));
+/// ```
+///
+/// [`TcpStream::connect`]: ../../std/net/struct.TcpStream.html#method.connect
 #[stable(feature = "rust1", since = "1.0.0")]
 pub trait ToSocketAddrs {
     /// Returned iterator over socket addresses which this type may correspond
     /// to.
     #[stable(feature = "rust1", since = "1.0.0")]
-    type Iter: Iterator<Item=SocketAddr>;
+    type Iter: Iterator<Item = SocketAddr>;
 
     /// Converts this object to an iterator of resolved `SocketAddr`s.
     ///
@@ -801,14 +870,19 @@ impl ToSocketAddrs for (Ipv6Addr, u16) {
     }
 }
 
-fn resolve_socket_addr(s: &str, p: u16) -> io::Result<vec::IntoIter<SocketAddr>> {
-    let ips = lookup_host(s)?;
-    let v: Vec<_> = ips.map(|mut a| { a.set_port(p); a }).collect();
+fn resolve_socket_addr(lh: LookupHost) -> io::Result<vec::IntoIter<SocketAddr>> {
+    let p = lh.port();
+    let v: Vec<_> = lh
+        .map(|mut a| {
+            a.set_port(p);
+            a
+        })
+        .collect();
     Ok(v.into_iter())
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a> ToSocketAddrs for (&'a str, u16) {
+impl ToSocketAddrs for (&str, u16) {
     type Iter = vec::IntoIter<SocketAddr>;
     fn to_socket_addrs(&self) -> io::Result<vec::IntoIter<SocketAddr>> {
         let (host, port) = *self;
@@ -816,14 +890,14 @@ impl<'a> ToSocketAddrs for (&'a str, u16) {
         // try to parse the host as a regular IP address first
         if let Ok(addr) = host.parse::<Ipv4Addr>() {
             let addr = SocketAddrV4::new(addr, port);
-            return Ok(vec![SocketAddr::V4(addr)].into_iter())
+            return Ok(vec![SocketAddr::V4(addr)].into_iter());
         }
         if let Ok(addr) = host.parse::<Ipv6Addr>() {
             let addr = SocketAddrV6::new(addr, port, 0, 0);
-            return Ok(vec![SocketAddr::V6(addr)].into_iter())
+            return Ok(vec![SocketAddr::V6(addr)].into_iter());
         }
 
-        resolve_socket_addr(host, port)
+        resolve_socket_addr((host, port).try_into()?)
     }
 }
 
@@ -837,22 +911,7 @@ impl ToSocketAddrs for str {
             return Ok(vec![addr].into_iter());
         }
 
-        macro_rules! try_opt {
-            ($e:expr, $msg:expr) => (
-                match $e {
-                    Some(r) => r,
-                    None => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                                      $msg)),
-                }
-            )
-        }
-
-        // split the string by ':' and convert the second part to u16
-        let mut parts_iter = self.rsplitn(2, ':');
-        let port_str = try_opt!(parts_iter.next(), "invalid socket address");
-        let host = try_opt!(parts_iter.next(), "invalid socket address");
-        let port: u16 = try_opt!(port_str.parse().ok(), "invalid port value");
-        resolve_socket_addr(host, port)
+        resolve_socket_addr(self.try_into()?)
     }
 }
 
@@ -866,7 +925,7 @@ impl<'a> ToSocketAddrs for &'a [SocketAddr] {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-impl<'a, T: ToSocketAddrs + ?Sized> ToSocketAddrs for &'a T {
+impl<T: ToSocketAddrs + ?Sized> ToSocketAddrs for &T {
     type Iter = T::Iter;
     fn to_socket_addrs(&self) -> io::Result<T::Iter> {
         (**self).to_socket_addrs()
@@ -883,8 +942,8 @@ impl ToSocketAddrs for String {
 
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
-    use net::*;
-    use net::test::{tsa, sa6, sa4};
+    use crate::net::test::{sa4, sa6, tsa};
+    use crate::net::*;
 
     #[test]
     fn to_socket_addr_ipaddr_u16() {
@@ -903,7 +962,10 @@ mod tests {
         assert_eq!(Ok(vec![a]), tsa(("2a02:6b8:0:1::1", 53)));
 
         let a = sa4(Ipv4Addr::new(127, 0, 0, 1), 23924);
+        #[cfg(not(target_env = "sgx"))]
         assert!(tsa(("localhost", 23924)).unwrap().contains(&a));
+        #[cfg(target_env = "sgx")]
+        let _ = a;
     }
 
     #[test]
@@ -915,7 +977,10 @@ mod tests {
         assert_eq!(Ok(vec![a]), tsa("[2a02:6b8:0:1::1]:53"));
 
         let a = sa4(Ipv4Addr::new(127, 0, 0, 1), 23924);
+        #[cfg(not(target_env = "sgx"))]
         assert!(tsa("localhost:23924").unwrap().contains(&a));
+        #[cfg(target_env = "sgx")]
+        let _ = a;
     }
 
     #[test]
@@ -930,17 +995,21 @@ mod tests {
         // s has been moved into the tsa call
     }
 
-    // FIXME: figure out why this fails on openbsd and bitrig and fix it
+    // FIXME: figure out why this fails on openbsd and fix it
     #[test]
-    #[cfg(not(any(windows, target_os = "openbsd", target_os = "bitrig")))]
+    #[cfg(not(any(windows, target_os = "openbsd")))]
     fn to_socket_addr_str_bad() {
         assert!(tsa("1200::AB00:1234::2552:7777:1313:34300").is_err());
     }
 
     #[test]
     fn set_ip() {
-        fn ip4(low: u8) -> Ipv4Addr { Ipv4Addr::new(77, 88, 21, low) }
-        fn ip6(low: u16) -> Ipv6Addr { Ipv6Addr::new(0x2a02, 0x6b8, 0, 1, 0, 0, 0, low) }
+        fn ip4(low: u8) -> Ipv4Addr {
+            Ipv4Addr::new(77, 88, 21, low)
+        }
+        fn ip6(low: u16) -> Ipv6Addr {
+            Ipv6Addr::new(0x2a02, 0x6b8, 0, 1, 0, 0, 0, low)
+        }
 
         let mut v4 = SocketAddrV4::new(ip4(11), 80);
         assert_eq!(v4.ip(), &ip4(11));
@@ -1016,7 +1085,11 @@ mod tests {
     #[test]
     fn is_v6() {
         let v6 = SocketAddr::V6(SocketAddrV6::new(
-                Ipv6Addr::new(0x2a02, 0x6b8, 0, 1, 0, 0, 0, 1), 80, 10, 0));
+            Ipv6Addr::new(0x2a02, 0x6b8, 0, 1, 0, 0, 0, 1),
+            80,
+            10,
+            0,
+        ));
         assert!(!v6.is_ipv4());
         assert!(v6.is_ipv6());
     }

@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Coherence phase
 //
 // The job of the coherence phase of typechecking is to ensure that
@@ -15,66 +5,76 @@
 // done by the orphan and overlap modules. Then we build up various
 // mappings. That mapping code resides here.
 
-use hir::def_id::{CrateNum, DefId, LOCAL_CRATE};
-use rustc::ty::{TyCtxt, TypeFoldable};
-use rustc::ty::maps::Providers;
+use crate::hir::def_id::{DefId, LOCAL_CRATE};
+use crate::hir::HirId;
+use rustc::traits;
+use rustc::ty::query::Providers;
+use rustc::ty::{self, TyCtxt, TypeFoldable};
+use rustc::util::common::time;
 
-use syntax::ast;
+use rustc_error_codes::*;
 
 mod builtin;
 mod inherent_impls;
 mod inherent_impls_overlap;
 mod orphan;
-mod overlap;
 mod unsafety;
 
-fn check_impl<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, node_id: ast::NodeId) {
-    let impl_def_id = tcx.hir.local_def_id(node_id);
+fn check_impl(tcx: TyCtxt<'_>, hir_id: HirId) {
+    let impl_def_id = tcx.hir().local_def_id(hir_id);
 
     // If there are no traits, then this implementation must have a
     // base type.
 
     if let Some(trait_ref) = tcx.impl_trait_ref(impl_def_id) {
-        debug!("(checking implementation) adding impl for trait '{:?}', item '{}'",
-                trait_ref,
-                tcx.item_path_str(impl_def_id));
+        debug!(
+            "(checking implementation) adding impl for trait '{:?}', item '{}'",
+            trait_ref,
+            tcx.def_path_str(impl_def_id)
+        );
 
         // Skip impls where one of the self type is an error type.
-        // This occurs with e.g. resolve failures (#30589).
+        // This occurs with e.g., resolve failures (#30589).
         if trait_ref.references_error() {
             return;
         }
 
         enforce_trait_manually_implementable(tcx, impl_def_id, trait_ref.def_id);
+        enforce_empty_impls_for_marker_traits(tcx, impl_def_id, trait_ref.def_id);
     }
 }
 
-fn enforce_trait_manually_implementable(tcx: TyCtxt, impl_def_id: DefId, trait_def_id: DefId) {
+fn enforce_trait_manually_implementable(tcx: TyCtxt<'_>, impl_def_id: DefId, trait_def_id: DefId) {
     let did = Some(trait_def_id);
-    let li = &tcx.lang_items;
+    let li = tcx.lang_items();
+    let span = tcx.sess.source_map().def_span(tcx.span_of_impl(impl_def_id).unwrap());
 
     // Disallow *all* explicit impls of `Sized` and `Unsize` for now.
     if did == li.sized_trait() {
-        let span = tcx.span_of_impl(impl_def_id).unwrap();
-        struct_span_err!(tcx.sess,
-                         span,
-                         E0322,
-                         "explicit impls for the `Sized` trait are not permitted")
-            .span_label(span, "impl of 'Sized' not allowed")
-            .emit();
+        struct_span_err!(
+            tcx.sess,
+            span,
+            E0322,
+            "explicit impls for the `Sized` trait are not permitted"
+        )
+        .span_label(span, "impl of 'Sized' not allowed")
+        .emit();
         return;
     }
 
     if did == li.unsize_trait() {
-        let span = tcx.span_of_impl(impl_def_id).unwrap();
-        span_err!(tcx.sess,
-                  span,
-                  E0328,
-                  "explicit impls for the `Unsize` trait are not permitted");
+        struct_span_err!(
+            tcx.sess,
+            span,
+            E0328,
+            "explicit impls for the `Unsize` trait are not permitted"
+        )
+        .span_label(span, "impl of `Unsize` not allowed")
+        .emit();
         return;
     }
 
-    if tcx.sess.features.borrow().unboxed_closures {
+    if tcx.features().unboxed_closures {
         // the feature gate allows all Fn traits
         return;
     }
@@ -88,17 +88,34 @@ fn enforce_trait_manually_implementable(tcx: TyCtxt, impl_def_id: DefId, trait_d
     } else {
         return; // everything OK
     };
-    let mut err = struct_span_err!(tcx.sess,
-                                   tcx.span_of_impl(impl_def_id).unwrap(),
-                                   E0183,
-                                   "manual implementations of `{}` are experimental",
-                                   trait_name);
-    help!(&mut err,
-          "add `#![feature(unboxed_closures)]` to the crate attributes to enable");
-    err.emit();
+    struct_span_err!(
+        tcx.sess,
+        span,
+        E0183,
+        "manual implementations of `{}` are experimental",
+        trait_name
+    )
+    .span_label(span, format!("manual implementations of `{}` are experimental", trait_name))
+    .help("add `#![feature(unboxed_closures)]` to the crate attributes to enable")
+    .emit();
 }
 
-pub fn provide(providers: &mut Providers) {
+/// We allow impls of marker traits to overlap, so they can't override impls
+/// as that could make it ambiguous which associated item to use.
+fn enforce_empty_impls_for_marker_traits(tcx: TyCtxt<'_>, impl_def_id: DefId, trait_def_id: DefId) {
+    if !tcx.trait_def(trait_def_id).is_marker {
+        return;
+    }
+
+    if tcx.associated_item_def_ids(trait_def_id).is_empty() {
+        return;
+    }
+
+    let span = tcx.sess.source_map().def_span(tcx.span_of_impl(impl_def_id).unwrap());
+    struct_span_err!(tcx.sess, span, E0715, "impls for marker traits cannot contain items").emit();
+}
+
+pub fn provide(providers: &mut Providers<'_>) {
     use self::builtin::coerce_unsized_info;
     use self::inherent_impls::{crate_inherent_impls, inherent_impls};
     use self::inherent_impls_overlap::crate_inherent_impls_overlap_check;
@@ -113,28 +130,92 @@ pub fn provide(providers: &mut Providers) {
     };
 }
 
-fn coherent_trait<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                            (_, def_id): (CrateNum, DefId)) {
-    let impls = tcx.hir.trait_impls(def_id);
+fn coherent_trait(tcx: TyCtxt<'_>, def_id: DefId) {
+    let impls = tcx.hir().trait_impls(def_id);
     for &impl_id in impls {
         check_impl(tcx, impl_id);
     }
     for &impl_id in impls {
-        overlap::check_impl(tcx, impl_id);
+        check_impl_overlap(tcx, impl_id);
     }
     builtin::check_trait(tcx, def_id);
 }
 
-pub fn check_coherence<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
-    for &trait_def_id in tcx.hir.krate().trait_impls.keys() {
-        tcx.coherent_trait((LOCAL_CRATE, trait_def_id));
+pub fn check_coherence(tcx: TyCtxt<'_>) {
+    for &trait_def_id in tcx.hir().krate().trait_impls.keys() {
+        tcx.ensure().coherent_trait(trait_def_id);
     }
 
-    unsafety::check(tcx);
-    orphan::check(tcx);
-    overlap::check_default_impls(tcx);
+    time(tcx.sess, "unsafety checking", || unsafety::check(tcx));
+    time(tcx.sess, "orphan checking", || orphan::check(tcx));
 
     // these queries are executed for side-effects (error reporting):
-    tcx.crate_inherent_impls(LOCAL_CRATE);
-    tcx.crate_inherent_impls_overlap_check(LOCAL_CRATE);
+    tcx.ensure().crate_inherent_impls(LOCAL_CRATE);
+    tcx.ensure().crate_inherent_impls_overlap_check(LOCAL_CRATE);
+}
+
+/// Overlap: no two impls for the same trait are implemented for the
+/// same type. Likewise, no two inherent impls for a given type
+/// constructor provide a method with the same name.
+fn check_impl_overlap<'tcx>(tcx: TyCtxt<'tcx>, hir_id: HirId) {
+    let impl_def_id = tcx.hir().local_def_id(hir_id);
+    let trait_ref = tcx.impl_trait_ref(impl_def_id).unwrap();
+    let trait_def_id = trait_ref.def_id;
+
+    if trait_ref.references_error() {
+        debug!("coherence: skipping impl {:?} with error {:?}", impl_def_id, trait_ref);
+        return;
+    }
+
+    // Trigger building the specialization graph for the trait of this impl.
+    // This will detect any overlap errors.
+    tcx.specialization_graph_of(trait_def_id);
+
+    // check for overlap with the automatic `impl Trait for Trait`
+    if let ty::Dynamic(ref data, ..) = trait_ref.self_ty().kind {
+        // This is something like impl Trait1 for Trait2. Illegal
+        // if Trait1 is a supertrait of Trait2 or Trait2 is not object safe.
+
+        let component_def_ids = data.iter().flat_map(|predicate| {
+            match predicate.skip_binder() {
+                ty::ExistentialPredicate::Trait(tr) => Some(tr.def_id),
+                ty::ExistentialPredicate::AutoTrait(def_id) => Some(*def_id),
+                // An associated type projection necessarily comes with
+                // an additional `Trait` requirement.
+                ty::ExistentialPredicate::Projection(..) => None,
+            }
+        });
+
+        for component_def_id in component_def_ids {
+            if !tcx.is_object_safe(component_def_id) {
+                // Without the 'object_safe_for_dispatch' feature this is an error
+                // which will be reported by wfcheck.  Ignore it here.
+                // This is tested by `coherence-impl-trait-for-trait-object-safe.rs`.
+                // With the feature enabled, the trait is not implemented automatically,
+                // so this is valid.
+            } else {
+                let mut supertrait_def_ids = traits::supertrait_def_ids(tcx, component_def_id);
+                if supertrait_def_ids.any(|d| d == trait_def_id) {
+                    let sp = tcx.sess.source_map().def_span(tcx.span_of_impl(impl_def_id).unwrap());
+                    struct_span_err!(
+                        tcx.sess,
+                        sp,
+                        E0371,
+                        "the object type `{}` automatically implements the trait `{}`",
+                        trait_ref.self_ty(),
+                        tcx.def_path_str(trait_def_id)
+                    )
+                    .span_label(
+                        sp,
+                        format!(
+                            "`{}` automatically implements trait `{}`",
+                            trait_ref.self_ty(),
+                            tcx.def_path_str(trait_def_id)
+                        ),
+                    )
+                    .emit();
+                }
+            }
+        }
+    }
 }

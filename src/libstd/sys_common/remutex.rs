@@ -1,18 +1,9 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use fmt;
-use marker;
-use ops::Deref;
-use sys_common::poison::{self, TryLockError, TryLockResult, LockResult};
-use sys::mutex as sys;
+use crate::fmt;
+use crate::marker;
+use crate::ops::Deref;
+use crate::panic::{RefUnwindSafe, UnwindSafe};
+use crate::sys::mutex as sys;
+use crate::sys_common::poison::{self, LockResult, TryLockError, TryLockResult};
 
 /// A re-entrant mutual exclusion
 ///
@@ -28,6 +19,8 @@ pub struct ReentrantMutex<T> {
 unsafe impl<T: Send> Send for ReentrantMutex<T> {}
 unsafe impl<T: Send> Sync for ReentrantMutex<T> {}
 
+impl<T> UnwindSafe for ReentrantMutex<T> {}
+impl<T> RefUnwindSafe for ReentrantMutex<T> {}
 
 /// An RAII implementation of a "scoped lock" of a mutex. When this structure is
 /// dropped (falls out of scope), the lock will be unlocked.
@@ -41,7 +34,7 @@ unsafe impl<T: Send> Sync for ReentrantMutex<T> {}
 /// because implementation of the trait would violate Rust’s reference aliasing
 /// rules. Use interior mutability (usually `RefCell`) in order to mutate the
 /// guarded data.
-#[must_use]
+#[must_use = "if unused the ReentrantMutex will immediately unlock"]
 pub struct ReentrantMutexGuard<'a, T: 'a> {
     // funny underscores due to how Deref currently works (it disregards field
     // privacy).
@@ -49,8 +42,7 @@ pub struct ReentrantMutexGuard<'a, T: 'a> {
     __poison: poison::Guard,
 }
 
-impl<'a, T> !marker::Send for ReentrantMutexGuard<'a, T> {}
-
+impl<T> !marker::Send for ReentrantMutexGuard<'_, T> {}
 
 impl<T> ReentrantMutex<T> {
     /// Creates a new reentrant mutex in an unlocked state.
@@ -78,7 +70,7 @@ impl<T> ReentrantMutex<T> {
     /// If another user of this mutex panicked while holding the mutex, then
     /// this call will return failure if the mutex would otherwise be
     /// acquired.
-    pub fn lock(&self) -> LockResult<ReentrantMutexGuard<T>> {
+    pub fn lock(&self) -> LockResult<ReentrantMutexGuard<'_, T>> {
         unsafe { self.inner.lock() }
         ReentrantMutexGuard::new(&self)
     }
@@ -95,7 +87,7 @@ impl<T> ReentrantMutex<T> {
     /// If another user of this mutex panicked while holding the mutex, then
     /// this call will return failure if the mutex would otherwise be
     /// acquired.
-    pub fn try_lock(&self) -> TryLockResult<ReentrantMutexGuard<T>> {
+    pub fn try_lock(&self) -> TryLockResult<ReentrantMutexGuard<'_, T>> {
         if unsafe { self.inner.try_lock() } {
             Ok(ReentrantMutexGuard::new(&self)?)
         } else {
@@ -114,30 +106,36 @@ impl<T> Drop for ReentrantMutex<T> {
 }
 
 impl<T: fmt::Debug + 'static> fmt::Debug for ReentrantMutex<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.try_lock() {
-            Ok(guard) => write!(f, "ReentrantMutex {{ data: {:?} }}", &*guard),
+            Ok(guard) => f.debug_struct("ReentrantMutex").field("data", &*guard).finish(),
             Err(TryLockError::Poisoned(err)) => {
-                write!(f, "ReentrantMutex {{ data: Poisoned({:?}) }}", &**err.get_ref())
-            },
-            Err(TryLockError::WouldBlock) => write!(f, "ReentrantMutex {{ <locked> }}")
+                f.debug_struct("ReentrantMutex").field("data", &**err.get_ref()).finish()
+            }
+            Err(TryLockError::WouldBlock) => {
+                struct LockedPlaceholder;
+                impl fmt::Debug for LockedPlaceholder {
+                    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        f.write_str("<locked>")
+                    }
+                }
+
+                f.debug_struct("ReentrantMutex").field("data", &LockedPlaceholder).finish()
+            }
         }
     }
 }
 
 impl<'mutex, T> ReentrantMutexGuard<'mutex, T> {
-    fn new(lock: &'mutex ReentrantMutex<T>)
-            -> LockResult<ReentrantMutexGuard<'mutex, T>> {
-        poison::map_result(lock.poison.borrow(), |guard| {
-            ReentrantMutexGuard {
-                __lock: lock,
-                __poison: guard,
-            }
+    fn new(lock: &'mutex ReentrantMutex<T>) -> LockResult<ReentrantMutexGuard<'mutex, T>> {
+        poison::map_result(lock.poison.borrow(), |guard| ReentrantMutexGuard {
+            __lock: lock,
+            __poison: guard,
         })
     }
 }
 
-impl<'mutex, T> Deref for ReentrantMutexGuard<'mutex, T> {
+impl<T> Deref for ReentrantMutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -145,7 +143,7 @@ impl<'mutex, T> Deref for ReentrantMutexGuard<'mutex, T> {
     }
 }
 
-impl<'a, T> Drop for ReentrantMutexGuard<'a, T> {
+impl<T> Drop for ReentrantMutexGuard<'_, T> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
@@ -155,13 +153,12 @@ impl<'a, T> Drop for ReentrantMutexGuard<'a, T> {
     }
 }
 
-
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
-    use sys_common::remutex::{ReentrantMutex, ReentrantMutexGuard};
-    use cell::RefCell;
-    use sync::Arc;
-    use thread;
+    use crate::cell::RefCell;
+    use crate::sync::Arc;
+    use crate::sys_common::remutex::{ReentrantMutex, ReentrantMutexGuard};
+    use crate::thread;
 
     #[test]
     fn smoke() {
@@ -206,12 +203,14 @@ mod tests {
         thread::spawn(move || {
             let lock = m2.try_lock();
             assert!(lock.is_err());
-        }).join().unwrap();
+        })
+        .join()
+        .unwrap();
         let _lock3 = m.try_lock().unwrap();
     }
 
     pub struct Answer<'a>(pub ReentrantMutexGuard<'a, RefCell<u32>>);
-    impl<'a> Drop for Answer<'a> {
+    impl Drop for Answer<'_> {
         fn drop(&mut self) {
             *self.0.borrow_mut() = 42;
         }
@@ -221,14 +220,15 @@ mod tests {
     fn poison_works() {
         let m = Arc::new(ReentrantMutex::new(RefCell::new(0)));
         let mc = m.clone();
-        let result = thread::spawn(move ||{
+        let result = thread::spawn(move || {
             let lock = mc.lock().unwrap();
             *lock.borrow_mut() = 1;
             let lock2 = mc.lock().unwrap();
             *lock.borrow_mut() = 2;
             let _answer = Answer(lock2);
             panic!("What the answer to my lifetimes dilemma is?");
-        }).join();
+        })
+        .join();
         assert!(result.is_err());
         let r = m.lock().err().unwrap().into_inner();
         assert_eq!(*r.borrow(), 42);

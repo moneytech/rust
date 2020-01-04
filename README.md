@@ -9,19 +9,31 @@ standard library, and documentation.
 
 Read ["Installation"] from [The Book].
 
-["Installation"]: https://doc.rust-lang.org/book/second-edition/ch01-01-installation.html
+["Installation"]: https://doc.rust-lang.org/book/ch01-01-installation.html
 [The Book]: https://doc.rust-lang.org/book/index.html
 
-## Building from Source
+## Installing from Source
 
+_Note: If you wish to contribute to the compiler, you should read [this
+chapter][rustcguidebuild] of the rustc-guide instead of this section._
+
+The Rust build system has a Python script called `x.py` to bootstrap building
+the compiler. More information about it may be found by running `./x.py --help`
+or reading the [rustc guide][rustcguidebuild].
+
+[rustcguidebuild]: https://rust-lang.github.io/rustc-guide/building/how-to-build-and-run.html
+
+### Building on *nix
 1. Make sure you have installed the dependencies:
 
-   * `g++` 4.7 or later or `clang++` 3.x or later
+   * `g++` 5.1 or later or `clang++` 3.5 or later
    * `python` 2.7 (but not 3.x)
    * GNU `make` 3.81 or later
    * `cmake` 3.4.3 or later
    * `curl`
    * `git`
+   * `ssl` which comes in `libssl-dev` or `openssl-devel`
+   * `pkg-config` if you are compiling on Linux and targeting Linux
 
 2. Clone the [source] with `git`:
 
@@ -32,21 +44,34 @@ Read ["Installation"] from [The Book].
 
 [source]: https://github.com/rust-lang/rust
 
-3. Build and install:
+3. Configure the build settings:
+
+    The Rust build system uses a file named `config.toml` in the root of the
+    source tree to determine various configuration settings for the build.
+    Copy the default `config.toml.example` to `config.toml` to get started.
 
     ```sh
-    $ ./x.py build && sudo ./x.py install
+    $ cp config.toml.example config.toml
     ```
 
-    > ***Note:*** Install locations can be adjusted by copying the config file
-    > from `./src/bootstrap/config.toml.example` to `./config.toml`, and
-    > adjusting the `prefix` option under `[install]`. Various other options are
-    > also supported, and are documented in the config file.
+    It is recommended that if you plan to use the Rust build system to create
+    an installation (using `./x.py install`) that you set the `prefix` value
+    in the `[install]` section to a directory that you have write permissions.
 
-    When complete, `sudo ./x.py install` will place several programs into
-    `/usr/local/bin`: `rustc`, the Rust compiler, and `rustdoc`, the
+    Create install directory if you are not installing in default directory
+
+4. Build and install:
+
+    ```sh
+    $ ./x.py build && ./x.py install
+    ```
+
+    When complete, `./x.py install` will place several programs into
+    `$PREFIX/bin`: `rustc`, the Rust compiler, and `rustdoc`, the
     API-documentation tool. This install does not include [Cargo],
-    Rust's package manager, which you may also want to build.
+    Rust's package manager. To build and install Cargo, you may
+    run `./x.py install cargo` or set the `build.extended` key in
+    `config.toml` to `true` to build and install all tools.
 
 [Cargo]: https://github.com/rust-lang/cargo
 
@@ -101,9 +126,14 @@ build.
 
 #### MSVC
 
-MSVC builds of Rust additionally require an installation of Visual Studio 2013
-(or later) so `rustc` can use its linker. Make sure to check the “C++ tools”
-option.
+MSVC builds of Rust additionally require an installation of Visual Studio 2017
+(or later) so `rustc` can use its linker.  The simplest way is to get the
+[Visual Studio], check the “C++ build tools” and “Windows 10 SDK” workload.
+
+[Visual Studio]: https://visualstudio.microsoft.com/downloads/
+
+(If you're installing cmake yourself, be careful that “C++ CMake tools for
+Windows” doesn't get included under “Individual components”.)
 
 With these dependencies installed, you can build the compiler in a `cmd.exe`
 shell with:
@@ -112,20 +142,31 @@ shell with:
 > python x.py build
 ```
 
-Currently building Rust only works with some known versions of Visual Studio. If
+Currently, building Rust only works with some known versions of Visual Studio. If
 you have a more recent version installed the build system doesn't understand
 then you may need to force rustbuild to use an older version. This can be done
 by manually calling the appropriate vcvars file before running the bootstrap.
 
+```batch
+> CALL "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+> python x.py build
 ```
-CALL "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat"
-python x.py build
-```
+
+### Building rustc with older host toolchains
+It is still possible to build Rust with the older toolchain versions listed below, but only if the
+LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN option is set to true in the config.toml file.
+
+* Clang 3.1
+* Apple Clang 3.1
+* GCC 4.8
+* Visual Studio 2015 (Update 3)
+
+Toolchain versions older than what is listed above cannot be used to build rustc.
 
 #### Specifying an ABI
 
 Each specific ABI can also be used from either environment (for example, using
-the GNU ABI in powershell) by using an explicit build triple. The available
+the GNU ABI in PowerShell) by using an explicit build triple. The available
 Windows build triples are:
 - GNU ABI (using GCC)
     - `i686-pc-windows-gnu`
@@ -134,10 +175,10 @@ Windows build triples are:
     - `i686-pc-windows-msvc`
     - `x86_64-pc-windows-msvc`
 
-The build triple can be specified by either specifying `--build=ABI` when
+The build triple can be specified by either specifying `--build=<triple>` when
 invoking `x.py` commands, or by copying the `config.toml` file (as described
-in Building From Source), and modifying the `build` option under the `[build]`
-section.
+in [Installing From Source](#installing-from-source)), and modifying the
+`build` option under the `[build]` section.
 
 ### Configure and Make
 
@@ -168,23 +209,20 @@ the ABI used. I.e., if the ABI was `x86_64-pc-windows-msvc`, the directory will 
 ## Notes
 
 Since the Rust compiler is written in Rust, it must be built by a
-precompiled "snapshot" version of itself (made in an earlier state of
+precompiled "snapshot" version of itself (made in an earlier stage of
 development). As such, source builds require a connection to the Internet, to
 fetch snapshots, and an OS that can execute the available snapshot binaries.
 
 Snapshot binaries are currently built and tested on several platforms:
 
-| Platform / Architecture        | x86 | x86_64 |
-|--------------------------------|-----|--------|
-| Windows (7, 8, Server 2008 R2) | ✓   | ✓      |
-| Linux (2.6.18 or later)        | ✓   | ✓      |
-| OSX (10.7 Lion or later)       | ✓   | ✓      |
+| Platform / Architecture    | x86 | x86_64 |
+|----------------------------|-----|--------|
+| Windows (7, 8, 10, ...)    | ✓   | ✓      |
+| Linux (2.6.18 or later)    | ✓   | ✓      |
+| macOS (10.7 Lion or later) | ✓   | ✓      |
 
 You may find that other platforms work, but these are our officially
 supported build environments that are most likely to work.
-
-Rust currently needs between 600MiB and 1.5GiB to build, depending on platform.
-If it hits swap, it will take a very long time to build.
 
 There is more advice about hacking on Rust in [CONTRIBUTING.md].
 
@@ -206,14 +244,19 @@ The Rust community congregates in a few places:
 
 To contribute to Rust, please see [CONTRIBUTING](CONTRIBUTING.md).
 
-Rust has an [IRC] culture and most real-time collaboration happens in a
-variety of channels on Mozilla's IRC network, irc.mozilla.org. The
-most popular channel is [#rust], a venue for general discussion about
-Rust. And a good place to ask for help would be [#rust-beginners].
+Most real-time collaboration happens in a variety of channels on the
+[Rust Discord server][rust-discord], with channels dedicated for getting help,
+community, documentation, and all major contribution areas in the Rust ecosystem.
+A good place to ask for help would be the #help channel.
 
-[IRC]: https://en.wikipedia.org/wiki/Internet_Relay_Chat
-[#rust]: irc://irc.mozilla.org/rust
-[#rust-beginners]: irc://irc.mozilla.org/rust-beginners
+The [rustc guide] might be a good place to start if you want to find out how
+various parts of the compiler work.
+
+Also, you may find the [rustdocs for the compiler itself][rustdocs] useful.
+
+[rust-discord]: https://discord.gg/rust-lang
+[rustc guide]: https://rust-lang.github.io/rustc-guide/about-this-guide.html
+[rustdocs]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc/
 
 ## License
 
@@ -223,3 +266,18 @@ BSD-like licenses.
 
 See [LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT), and
 [COPYRIGHT](COPYRIGHT) for details.
+
+## Trademark
+
+The Rust programming language is an open source, community project governed
+by a core team. It is also sponsored by the Mozilla Foundation (“Mozilla”),
+which owns and protects the Rust and Cargo trademarks and logos
+(the “Rust Trademarks”).
+
+If you want to use these names or brands, please read the [media guide][media-guide].
+
+Third-party logos may be subject to third-party copyrights and trademarks. See
+[Licenses][policies-licenses] for details.
+
+[media-guide]: https://www.rust-lang.org/policies/media-guide
+[policies-licenses]: https://www.rust-lang.org/policies/licenses

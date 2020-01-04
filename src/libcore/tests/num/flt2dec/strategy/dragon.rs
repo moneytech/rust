@@ -1,14 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use std::prelude::v1::*;
 use super::super::*;
 use core::num::bignum::Big32x40 as Big;
 use core::num::flt2dec::strategy::dragon::*;
@@ -24,6 +13,7 @@ fn test_mul_pow10() {
     }
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn shortest_sanity_test() {
     f64_shortest_sanity_test(format_shortest);
@@ -32,6 +22,7 @@ fn shortest_sanity_test() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Miri is too slow
 fn exact_sanity_test() {
     // This test ends up running what I can only assume is some corner-ish case
     // of the `exp2` library function, defined in whatever C runtime we're
@@ -71,4 +62,3 @@ fn test_to_exact_exp_str() {
 fn test_to_exact_fixed_str() {
     to_exact_fixed_str_test(format_exact);
 }
-

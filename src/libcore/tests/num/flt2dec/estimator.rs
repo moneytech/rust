@@ -1,31 +1,26 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-// FIXME https://github.com/kripken/emscripten/issues/4563
-// NB we have to actually not compile this test to avoid
-// an undefined symbol error
-#![cfg(not(target_os = "emscripten"))]
-
 use core::num::flt2dec::estimator::*;
 
 #[test]
 fn test_estimate_scaling_factor() {
     macro_rules! assert_almost_eq {
-        ($actual:expr, $expected:expr) => ({
+        ($actual:expr, $expected:expr) => {{
             let actual = $actual;
             let expected = $expected;
-            println!("{} - {} = {} - {} = {}", stringify!($expected), stringify!($actual),
-                     expected, actual, expected - actual);
-            assert!(expected == actual || expected == actual + 1,
-                    "expected {}, actual {}", expected, actual);
-        })
+            println!(
+                "{} - {} = {} - {} = {}",
+                stringify!($expected),
+                stringify!($actual),
+                expected,
+                actual,
+                expected - actual
+            );
+            assert!(
+                expected == actual || expected == actual + 1,
+                "expected {}, actual {}",
+                expected,
+                actual
+            );
+        }};
     }
 
     assert_almost_eq!(estimate_scaling_factor(1, 0), 0);
@@ -57,9 +52,13 @@ fn test_estimate_scaling_factor() {
     assert_almost_eq!(estimate_scaling_factor(1, -1074), -323);
     assert_almost_eq!(estimate_scaling_factor(0x1fffffffffffff, 971), 309);
 
-    for i in -1074..972 {
+    #[cfg(not(miri))] // Miri is too slow
+    let iter = -1074..972;
+    #[cfg(miri)]
+    let iter = (-1074..972).step_by(37);
+
+    for i in iter {
         let expected = super::ldexp_f64(1.0, i).log10().ceil();
         assert_almost_eq!(estimate_scaling_factor(1, i as i16), expected as i16);
     }
 }
-

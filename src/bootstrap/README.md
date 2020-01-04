@@ -8,14 +8,14 @@ system.
 
 The rustbuild build system has a primary entry point, a top level `x.py` script:
 
-```
-python ./x.py build
+```sh
+$ python ./x.py build
 ```
 
 Note that if you're on Unix you should be able to execute the script directly:
 
-```
-./x.py build
+```sh
+$ ./x.py build
 ```
 
 The script accepts commands, flags, and arguments to determine what to do:
@@ -39,7 +39,7 @@ The script accepts commands, flags, and arguments to determine what to do:
   ```
 
   If files are dirty that would normally be rebuilt from stage 0, that can be
-  overidden using `--keep-stage 0`. Using `--keep-stage n` will skip all steps
+  overridden using `--keep-stage 0`. Using `--keep-stage n` will skip all steps
   that belong to stage n or earlier:
 
   ```
@@ -55,14 +55,18 @@ The script accepts commands, flags, and arguments to determine what to do:
   # run all unit tests
   ./x.py test
 
-  # execute the run-pass test suite
-  ./x.py test src/test/run-pass
+  # execute the UI test suite
+  ./x.py test src/test/ui
 
-  # execute only some tests in the run-pass test suite
-  ./x.py test src/test/run-pass --test-args substring-of-test-name
+  # execute only some tests in the UI test suite
+  ./x.py test src/test/ui --test-args substring-of-test-name
 
   # execute tests in the standard library in stage0
   ./x.py test --stage 0 src/libstd
+
+  # execute tests in the core and standard library in stage0,
+  # without running doc tests (thus avoid depending on building the compiler)
+  ./x.py test --stage 0 --no-doc src/libcore src/libstd
 
   # execute all doc tests
   ./x.py test src/doc
@@ -73,16 +77,18 @@ The script accepts commands, flags, and arguments to determine what to do:
 
 ## Configuring rustbuild
 
-There are currently two primary methods for configuring the rustbuild build
-system. First, the `./configure` options serialized in `config.mk` will be
-parsed and read. That is, if any `./configure` options are passed, they'll be
-handled naturally.
+There are currently two methods for configuring the rustbuild build system.
 
-Next, rustbuild offers a TOML-based configuration system with a `config.toml`
-file in the same location as `config.mk`. An example of this configuration can
-be found at `src/bootstrap/config.toml.example`, and the configuration file
-can also be passed as `--config path/to/config.toml` if the build system is
-being invoked manually (via the python script).
+First, rustbuild offers a TOML-based configuration system with a `config.toml`
+file. An example of this configuration can be found at `config.toml.example`,
+and the configuration file can also be passed as `--config path/to/config.toml`
+if the build system is being invoked manually (via the python script).
+
+Next, the `./configure` options serialized in `config.mk` will be
+parsed and read. That is, if any `./configure` options are passed, they'll be
+handled naturally. `./configure` should almost never be used for local
+installations, and is primarily useful for CI. Prefer to customize behavior
+using `config.toml`.
 
 Finally, rustbuild makes use of the [gcc-rs crate] which has [its own
 method][env-vars] of configuring C compilers and C flags via environment
@@ -123,18 +129,18 @@ To follow this course of action, first thing you will want to do is to
 install a nightly, presumably using `rustup`. You will then want to
 configure your directory to use this build, like so:
 
-```
-# configure to use local rust instead of downloding a beta.
+```sh
+# configure to use local rust instead of downloading a beta.
 # `--local-rust-root` is optional here. If elided, we will
 # use whatever rustc we find on your PATH.
-> configure --enable-rustbuild --local-rust-root=~/.cargo/ --enable-local-rebuild
+$ ./configure --local-rust-root=~/.cargo/ --enable-local-rebuild
 ```
 
 After that, you can use the `--incremental` flag to actually do
 incremental builds:
 
-```
-> ../x.py build --incremental
+```sh
+$ ./x.py build --incremental
 ```
 
 The `--incremental` flag will store incremental compilation artifacts
@@ -153,7 +159,7 @@ will still be using the local nightly as your bootstrap).
 This build system houses all output under the `build` directory, which looks
 like this:
 
-```
+```sh
 # Root folder of all output. Everything is scoped underneath here
 build/
 
@@ -209,7 +215,7 @@ build/
 
     # Output for all compiletest-based test suites
     test/
-      run-pass/
+      ui/
       compile-fail/
       debuginfo/
       ...
@@ -310,17 +316,20 @@ After that, each module in rustbuild should have enough documentation to keep
 you up and running. Some general areas that you may be interested in modifying
 are:
 
-* Adding a new build tool? Take a look at `bootstrap/step.rs` for examples of
+* Adding a new build tool? Take a look at `bootstrap/tool.rs` for examples of
   other tools.
 * Adding a new compiler crate? Look no further! Adding crates can be done by
   adding a new directory with `Cargo.toml` followed by configuring all
   `Cargo.toml` files accordingly.
-* Adding a new dependency from crates.io? We're still working on that, so hold
-  off on that for now.
-* Adding a new configuration option? Take a look at `bootstrap/config.rs` or
-  perhaps `bootstrap/flags.rs` and then modify the build elsewhere to read that
-  option.
+* Adding a new dependency from crates.io? This should just work inside the
+  compiler artifacts stage (everything other than libtest and libstd).
+* Adding a new configuration option? You'll want to modify `bootstrap/flags.rs`
+  for command line flags and then `bootstrap/config.rs` to copy the flags to the
+  `Config` struct.
 * Adding a sanity check? Take a look at `bootstrap/sanity.rs`.
 
-If you have any questions feel free to reach out on `#rust-internals` on IRC or
-open an issue in the bug tracker!
+If you have any questions feel free to reach out on `#infra` channel in the
+[Rust Discord server][rust-discord] or ask on internals.rust-lang.org. When
+you encounter bugs, please file issues on the rust-lang/rust issue tracker.
+
+[rust-discord]: https://discord.gg/rust-lang

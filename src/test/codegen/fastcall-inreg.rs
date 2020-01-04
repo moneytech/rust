@@ -1,13 +1,3 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // Checks if the "fastcall" calling convention marks function arguments
 // as "inreg" like the C/C++ compilers for the platforms.
 // x86 only.
@@ -21,9 +11,7 @@
 // ignore-bpfeb
 // ignore-hexagon
 // ignore-mips
-// ignore-mipsel
 // ignore-mips64
-// ignore-mips64el
 // ignore-msp430
 // ignore-powerpc64
 // ignore-powerpc64le
@@ -31,6 +19,7 @@
 // ignore-r600
 // ignore-amdgcn
 // ignore-sparc
+// ignore-sparc64
 // ignore-sparcv9
 // ignore-sparcel
 // ignore-s390x
@@ -59,28 +48,28 @@
 
 #![crate_type = "lib"]
 
-mod tests {
-    // CHECK: @f1(i32 inreg, i32 inreg, i32)
+pub mod tests {
+    // CHECK: @f1(i32 inreg %_1, i32 inreg %_2, i32 %_3)
     #[no_mangle]
-    extern "fastcall" fn f1(_: i32, _: i32, _: i32) {}
+    pub extern "fastcall" fn f1(_: i32, _: i32, _: i32) {}
 
-    // CHECK: @f2(i32* inreg, i32* inreg, i32*)
+    // CHECK: @f2(i32* inreg %_1, i32* inreg %_2, i32* %_3)
     #[no_mangle]
-    extern "fastcall" fn f2(_: *const i32, _: *const i32, _: *const i32) {}
+    pub extern "fastcall" fn f2(_: *const i32, _: *const i32, _: *const i32) {}
 
-    // CHECK: @f3(float, i32 inreg, i32 inreg, i32)
+    // CHECK: @f3(float %_1, i32 inreg %_2, i32 inreg %_3, i32 %_4)
     #[no_mangle]
-    extern "fastcall" fn f3(_: f32, _: i32, _: i32, _: i32) {}
+    pub extern "fastcall" fn f3(_: f32, _: i32, _: i32, _: i32) {}
 
-    // CHECK: @f4(i32 inreg, float, i32 inreg, i32)
+    // CHECK: @f4(i32 inreg %_1, float %_2, i32 inreg %_3, i32 %_4)
     #[no_mangle]
-    extern "fastcall" fn f4(_: i32, _: f32, _: i32, _: i32) {}
+    pub extern "fastcall" fn f4(_: i32, _: f32, _: i32, _: i32) {}
 
-    // CHECK: @f5(i64, i32)
+    // CHECK: @f5(i64 %_1, i32 %_2)
     #[no_mangle]
-    extern "fastcall" fn f5(_: i64, _: i32) {}
+    pub extern "fastcall" fn f5(_: i64, _: i32) {}
 
-    // CHECK: @f6(i1 inreg zeroext, i32 inreg, i32)
+    // CHECK: @f6(i1 inreg zeroext %_1, i32 inreg %_2, i32 %_3)
     #[no_mangle]
-    extern "fastcall" fn f6(_: bool, _: i32, _: i32) {}
+    pub extern "fastcall" fn f6(_: bool, _: i32, _: i32) {}
 }

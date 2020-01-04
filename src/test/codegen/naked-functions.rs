@@ -1,13 +1,3 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // ignore-tidy-linelength
 
 // compile-flags: -C no-prepopulate-passes
@@ -15,41 +5,41 @@
 #![crate_type = "lib"]
 #![feature(naked_functions)]
 
-// CHECK: Function Attrs: naked uwtable
-// CHECK-NEXT: define internal void @naked_empty()
+// CHECK: Function Attrs: naked
+// CHECK-NEXT: define void @naked_empty()
 #[no_mangle]
 #[naked]
-fn naked_empty() {
+pub fn naked_empty() {
     // CHECK-NEXT: {{.+}}:
     // CHECK-NEXT: ret void
 }
 
-// CHECK: Function Attrs: naked uwtable
+// CHECK: Function Attrs: naked
 #[no_mangle]
 #[naked]
-// CHECK-NEXT: define internal void @naked_with_args(i{{[0-9]+}})
-fn naked_with_args(a: isize) {
+// CHECK-NEXT: define void @naked_with_args(i{{[0-9]+}})
+pub fn naked_with_args(a: isize) {
     // CHECK-NEXT: {{.+}}:
     // CHECK-NEXT: %a = alloca i{{[0-9]+}}
     &a; // keep variable in an alloca
     // CHECK: ret void
 }
 
-// CHECK: Function Attrs: naked uwtable
-// CHECK-NEXT: define internal i{{[0-9]+}} @naked_with_return()
+// CHECK: Function Attrs: naked
+// CHECK-NEXT: define i{{[0-9]+}} @naked_with_return()
 #[no_mangle]
 #[naked]
-fn naked_with_return() -> isize {
+pub fn naked_with_return() -> isize {
     // CHECK-NEXT: {{.+}}:
     // CHECK-NEXT: ret i{{[0-9]+}} 0
     0
 }
 
-// CHECK: Function Attrs: naked uwtable
-// CHECK-NEXT: define internal i{{[0-9]+}} @naked_with_args_and_return(i{{[0-9]+}})
+// CHECK: Function Attrs: naked
+// CHECK-NEXT: define i{{[0-9]+}} @naked_with_args_and_return(i{{[0-9]+}})
 #[no_mangle]
 #[naked]
-fn naked_with_args_and_return(a: isize) -> isize {
+pub fn naked_with_args_and_return(a: isize) -> isize {
     // CHECK-NEXT: {{.+}}:
     // CHECK-NEXT: %a = alloca i{{[0-9]+}}
     &a; // keep variable in an alloca
@@ -57,11 +47,11 @@ fn naked_with_args_and_return(a: isize) -> isize {
     a
 }
 
-// CHECK: Function Attrs: naked uwtable
-// CHECK-NEXT: define internal void @naked_recursive()
+// CHECK: Function Attrs: naked
+// CHECK-NEXT: define void @naked_recursive()
 #[no_mangle]
 #[naked]
-fn naked_recursive() {
+pub fn naked_recursive() {
     // CHECK-NEXT: {{.+}}:
     // CHECK-NEXT: call void @naked_empty()
 

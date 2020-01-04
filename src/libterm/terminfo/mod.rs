@@ -1,13 +1,3 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Terminfo database interface.
 
 use std::collections::HashMap;
@@ -15,18 +5,16 @@ use std::env;
 use std::error;
 use std::fmt;
 use std::fs::File;
-use std::io::prelude::*;
-use std::io;
-use std::io::BufReader;
+use std::io::{self, prelude::*, BufReader};
 use std::path::Path;
 
-use Attr;
-use color;
-use Terminal;
-use self::searcher::get_dbpath_for_term;
-use self::parser::compiled::{parse, msys_terminfo};
-use self::parm::{expand, Variables, Param};
+use crate::color;
+use crate::Attr;
+use crate::Terminal;
 
+use parm::{expand, Param, Variables};
+use parser::compiled::{msys_terminfo, parse};
+use searcher::get_dbpath_for_term;
 
 /// A parsed terminfo database entry.
 #[derive(Debug)]
@@ -54,39 +42,35 @@ pub enum Error {
 }
 
 impl error::Error for Error {
-    fn description(&self) -> &str {
-        "failed to create TermInfo"
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        use self::Error::*;
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        use Error::*;
         match self {
-            &IoError(ref e) => Some(e),
+            IoError(e) => Some(e),
             _ => None,
         }
     }
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::Error::*;
-        match self {
-            &TermUnset => Ok(()),
-            &MalformedTerminfo(ref e) => e.fmt(f),
-            &IoError(ref e) => e.fmt(f),
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Error::*;
+        match *self {
+            TermUnset => Ok(()),
+            MalformedTerminfo(ref e) => e.fmt(f),
+            IoError(ref e) => e.fmt(f),
         }
     }
 }
 
 impl TermInfo {
-    /// Create a TermInfo based on current environment.
+    /// Creates a TermInfo based on current environment.
     pub fn from_env() -> Result<TermInfo, Error> {
         let term = match env::var("TERM") {
             Ok(name) => TermInfo::from_name(&name),
             Err(..) => return Err(Error::TermUnset),
         };
 
-        if term.is_err() && env::var("MSYSCON").ok().map_or(false, |s| "mintty.exe" == s) {
+        if term.is_err() && env::var("MSYSCON").map_or(false, |s| "mintty.exe" == s) {
             // msys terminal
             Ok(msys_terminfo())
         } else {
@@ -94,7 +78,7 @@ impl TermInfo {
         }
     }
 
-    /// Create a TermInfo for the named terminal.
+    /// Creates a TermInfo for the named terminal.
     pub fn from_name(name: &str) -> Result<TermInfo, Error> {
         get_dbpath_for_term(name)
             .ok_or_else(|| {
@@ -109,9 +93,9 @@ impl TermInfo {
     }
     // Keep the metadata small
     fn _from_path(path: &Path) -> Result<TermInfo, Error> {
-        let file = File::open(path).map_err(|e| Error::IoError(e))?;
+        let file = File::open(path).map_err(Error::IoError)?;
         let mut reader = BufReader::new(file);
-        parse(&mut reader, false).map_err(|e| Error::MalformedTerminfo(e))
+        parse(&mut reader, false).map_err(Error::MalformedTerminfo)
     }
 }
 
@@ -123,7 +107,6 @@ pub mod parser {
     pub mod compiled;
 }
 pub mod parm;
-
 
 fn cap_for_attr(attr: Attr) -> &'static str {
     match attr {
@@ -190,18 +173,14 @@ impl<T: Write + Send> Terminal for TerminfoTerminal<T> {
     fn reset(&mut self) -> io::Result<bool> {
         // are there any terminals that have color/attrs and not sgr0?
         // Try falling back to sgr, then op
-        let cmd = match ["sgr0", "sgr", "op"]
-                            .iter()
-                            .filter_map(|cap| self.ti.strings.get(*cap))
-                            .next() {
-            Some(op) => {
-                match expand(&op, &[], &mut Variables::new()) {
+        let cmd =
+            match ["sgr0", "sgr", "op"].iter().filter_map(|cap| self.ti.strings.get(*cap)).next() {
+                Some(op) => match expand(&op, &[], &mut Variables::new()) {
                     Ok(cmd) => cmd,
                     Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-                }
-            }
-            None => return Ok(false),
-        };
+                },
+                None => return Ok(false),
+            };
         self.out.write_all(&cmd).and(Ok(true))
     }
 
@@ -214,30 +193,27 @@ impl<T: Write + Send> Terminal for TerminfoTerminal<T> {
     }
 
     fn into_inner(self) -> T
-        where Self: Sized
+    where
+        Self: Sized,
     {
         self.out
     }
 }
 
 impl<T: Write + Send> TerminfoTerminal<T> {
-    /// Create a new TerminfoTerminal with the given TermInfo and Write.
+    /// Creates a new TerminfoTerminal with the given TermInfo and Write.
     pub fn new_with_terminfo(out: T, terminfo: TermInfo) -> TerminfoTerminal<T> {
-        let nc = if terminfo.strings.contains_key("setaf") &&
-                    terminfo.strings.contains_key("setab") {
+        let nc = if terminfo.strings.contains_key("setaf") && terminfo.strings.contains_key("setab")
+        {
             terminfo.numbers.get("colors").map_or(0, |&n| n)
         } else {
             0
         };
 
-        TerminfoTerminal {
-            out: out,
-            ti: terminfo,
-            num_colors: nc,
-        }
+        TerminfoTerminal { out, ti: terminfo, num_colors: nc }
     }
 
-    /// Create a new TerminfoTerminal for the current environment with the given Write.
+    /// Creates a new TerminfoTerminal for the current environment with the given Write.
     ///
     /// Returns `None` when the terminfo cannot be found or parsed.
     pub fn new(out: T) -> Option<TerminfoTerminal<T>> {
@@ -245,26 +221,19 @@ impl<T: Write + Send> TerminfoTerminal<T> {
     }
 
     fn dim_if_necessary(&self, color: color::Color) -> color::Color {
-        if color >= self.num_colors && color >= 8 && color < 16 {
-            color - 8
-        } else {
-            color
-        }
+        if color >= self.num_colors && color >= 8 && color < 16 { color - 8 } else { color }
     }
 
     fn apply_cap(&mut self, cmd: &str, params: &[Param]) -> io::Result<bool> {
         match self.ti.strings.get(cmd) {
-            Some(cmd) => {
-                match expand(&cmd, params, &mut Variables::new()) {
-                    Ok(s) => self.out.write_all(&s).and(Ok(true)),
-                    Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-                }
-            }
+            Some(cmd) => match expand(&cmd, params, &mut Variables::new()) {
+                Ok(s) => self.out.write_all(&s).and(Ok(true)),
+                Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+            },
             None => Ok(false),
         }
     }
 }
-
 
 impl<T: Write> Write for TerminfoTerminal<T> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

@@ -13,14 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   gdb \
   xz-utils
 
-RUN curl -o /usr/local/bin/sccache \
-      https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/2017-05-12-sccache-x86_64-unknown-linux-musl && \
-      chmod +x /usr/local/bin/sccache
 
-RUN curl -OL https://github.com/Yelp/dumb-init/releases/download/v1.2.0/dumb-init_1.2.0_amd64.deb && \
-    dpkg -i dumb-init_*.deb && \
-    rm dumb-init_*.deb
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+COPY scripts/sccache.sh /scripts/
+RUN sh /scripts/sccache.sh
 
 ENV RUST_CONFIGURE_ARGS --build=i686-unknown-linux-gnu
-ENV SCRIPT python2.7 ../x.py test
+# Exclude some tests that are unlikely to be platform specific, to speed up
+# this slow job.
+ENV SCRIPT python2.7 ../x.py test \
+  --exclude src/bootstrap \
+  --exclude src/test/rustdoc-js \
+  --exclude src/tools/error_index_generator \
+  --exclude src/tools/linkchecker
+
+# FIXME(#59637) takes too long on CI right now
+ENV NO_LLVM_ASSERTIONS=1 NO_DEBUG_ASSERTIONS=1

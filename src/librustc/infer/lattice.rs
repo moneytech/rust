@@ -1,17 +1,7 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! # Lattice Variables
 //!
 //! This file contains generic code for operating on inference variables
-//! that are characterized by an upper- and lower-bound.  The logic and
+//! that are characterized by an upper- and lower-bound. The logic and
 //! reasoning is explained in detail in the large comment in `infer.rs`.
 //!
 //! The code in here is defined quite generically so that it can be
@@ -23,22 +13,22 @@
 //!
 //! Although all the functions are generic, we generally write the
 //! comments in a way that is specific to type variables and the LUB
-//! operation.  It's just easier that way.
+//! operation. It's just easier that way.
 //!
 //! In general all of the functions are defined parametrically
 //! over a `LatticeValue`, which is a value defined with respect to
 //! a lattice.
 
+use super::type_variable::{TypeVariableOrigin, TypeVariableOriginKind};
 use super::InferCtxt;
-use super::type_variable::TypeVariableOrigin;
 
-use traits::ObligationCause;
-use ty::TyVar;
-use ty::{self, Ty};
-use ty::relate::{RelateResult, TypeRelation};
+use crate::traits::ObligationCause;
+use crate::ty::relate::{RelateResult, TypeRelation};
+use crate::ty::TyVar;
+use crate::ty::{self, Ty};
 
-pub trait LatticeDir<'f, 'gcx: 'f+'tcx, 'tcx: 'f> : TypeRelation<'f, 'gcx, 'tcx> {
-    fn infcx(&self) -> &'f InferCtxt<'f, 'gcx, 'tcx>;
+pub trait LatticeDir<'f, 'tcx>: TypeRelation<'tcx> {
+    fn infcx(&self) -> &'f InferCtxt<'f, 'tcx>;
 
     fn cause(&self) -> &ObligationCause<'tcx>;
 
@@ -46,21 +36,20 @@ pub trait LatticeDir<'f, 'gcx: 'f+'tcx, 'tcx: 'f> : TypeRelation<'f, 'gcx, 'tcx>
     // the LUB/GLB of `a` and `b` as appropriate.
     //
     // Subtle hack: ordering *may* be significant here. This method
-    // relates `v` to `a` first, which may help us to avoid unecessary
+    // relates `v` to `a` first, which may help us to avoid unnecessary
     // type variable obligations. See caller for details.
     fn relate_bound(&mut self, v: Ty<'tcx>, a: Ty<'tcx>, b: Ty<'tcx>) -> RelateResult<'tcx, ()>;
 }
 
-pub fn super_lattice_tys<'a, 'gcx, 'tcx, L>(this: &mut L,
-                                            a: Ty<'tcx>,
-                                            b: Ty<'tcx>)
-                                            -> RelateResult<'tcx, Ty<'tcx>>
-    where L: LatticeDir<'a, 'gcx, 'tcx>, 'gcx: 'a+'tcx, 'tcx: 'a
+pub fn super_lattice_tys<'a, 'tcx: 'a, L>(
+    this: &mut L,
+    a: Ty<'tcx>,
+    b: Ty<'tcx>,
+) -> RelateResult<'tcx, Ty<'tcx>>
+where
+    L: LatticeDir<'a, 'tcx>,
 {
-    debug!("{}.lattice_tys({:?}, {:?})",
-           this.tag(),
-           a,
-           b);
+    debug!("{}.lattice_tys({:?}, {:?})", this.tag(), a, b);
 
     if a == b {
         return Ok(a);
@@ -69,15 +58,7 @@ pub fn super_lattice_tys<'a, 'gcx, 'tcx, L>(this: &mut L,
     let infcx = this.infcx();
     let a = infcx.type_variables.borrow_mut().replace_if_possible(a);
     let b = infcx.type_variables.borrow_mut().replace_if_possible(b);
-    match (&a.sty, &b.sty) {
-        (&ty::TyInfer(TyVar(..)), &ty::TyInfer(TyVar(..)))
-            if infcx.type_var_diverges(a) && infcx.type_var_diverges(b) => {
-            let v = infcx.next_diverging_ty_var(
-                TypeVariableOrigin::LatticeVariable(this.cause().span));
-            this.relate_bound(v, a, b)?;
-            Ok(v)
-        }
-
+    match (&a.kind, &b.kind) {
         // If one side is known to be a variable and one is not,
         // create a variable (`v`) to represent the LUB. Make sure to
         // relate `v` to the non-type-variable first (by passing it
@@ -96,19 +77,23 @@ pub fn super_lattice_tys<'a, 'gcx, 'tcx, L>(this: &mut L,
         // is (e.g.) `Box<i32>`. A more obvious solution might be to
         // iterate on the subtype obligations that are returned, but I
         // think this suffices. -nmatsakis
-        (&ty::TyInfer(TyVar(..)), _) => {
-            let v = infcx.next_ty_var(TypeVariableOrigin::LatticeVariable(this.cause().span));
+        (&ty::Infer(TyVar(..)), _) => {
+            let v = infcx.next_ty_var(TypeVariableOrigin {
+                kind: TypeVariableOriginKind::LatticeVariable,
+                span: this.cause().span,
+            });
             this.relate_bound(v, b, a)?;
             Ok(v)
         }
-        (_, &ty::TyInfer(TyVar(..))) => {
-            let v = infcx.next_ty_var(TypeVariableOrigin::LatticeVariable(this.cause().span));
+        (_, &ty::Infer(TyVar(..))) => {
+            let v = infcx.next_ty_var(TypeVariableOrigin {
+                kind: TypeVariableOriginKind::LatticeVariable,
+                span: this.cause().span,
+            });
             this.relate_bound(v, a, b)?;
             Ok(v)
         }
 
-        _ => {
-            infcx.super_combine_tys(this, a, b)
-        }
+        _ => infcx.super_combine_tys(this, a, b),
     }
 }

@@ -1,102 +1,94 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Unsafety checker: every impl either implements a trait defined in this
 //! crate or pertains to a type defined in this crate.
 
-use rustc::ty::TyCtxt;
 use rustc::hir::itemlikevisit::ItemLikeVisitor;
 use rustc::hir::{self, Unsafety};
+use rustc::ty::TyCtxt;
 
-pub fn check<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
-    let mut unsafety = UnsafetyChecker { tcx: tcx };
-    tcx.hir.krate().visit_all_item_likes(&mut unsafety);
+use rustc_error_codes::*;
+
+pub fn check(tcx: TyCtxt<'_>) {
+    let mut unsafety = UnsafetyChecker { tcx };
+    tcx.hir().krate().visit_all_item_likes(&mut unsafety);
 }
 
-struct UnsafetyChecker<'cx, 'tcx: 'cx> {
-    tcx: TyCtxt<'cx, 'tcx, 'tcx>,
+struct UnsafetyChecker<'tcx> {
+    tcx: TyCtxt<'tcx>,
 }
 
-impl<'cx, 'tcx, 'v> UnsafetyChecker<'cx, 'tcx> {
-    fn check_unsafety_coherence(&mut self,
-                                item: &'v hir::Item,
-                                impl_generics: Option<&hir::Generics>,
-                                unsafety: hir::Unsafety,
-                                polarity: hir::ImplPolarity) {
-        match self.tcx.impl_trait_ref(self.tcx.hir.local_def_id(item.id)) {
-            None => {}
+impl UnsafetyChecker<'tcx> {
+    fn check_unsafety_coherence(
+        &mut self,
+        item: &'v hir::Item<'v>,
+        impl_generics: Option<&hir::Generics<'_>>,
+        unsafety: hir::Unsafety,
+        polarity: hir::ImplPolarity,
+    ) {
+        let local_did = self.tcx.hir().local_def_id(item.hir_id);
+        if let Some(trait_ref) = self.tcx.impl_trait_ref(local_did) {
+            let trait_def = self.tcx.trait_def(trait_ref.def_id);
+            let unsafe_attr = impl_generics.and_then(|generics| {
+                generics.params.iter().find(|p| p.pure_wrt_drop).map(|_| "may_dangle")
+            });
+            match (trait_def.unsafety, unsafe_attr, unsafety, polarity) {
+                (Unsafety::Normal, None, Unsafety::Unsafe, hir::ImplPolarity::Positive) => {
+                    span_err!(
+                        self.tcx.sess,
+                        item.span,
+                        E0199,
+                        "implementing the trait `{}` is not unsafe",
+                        trait_ref.print_only_trait_path()
+                    );
+                }
 
-            Some(trait_ref) => {
-                let trait_def = self.tcx.trait_def(trait_ref.def_id);
-                let unsafe_attr = impl_generics.and_then(|g| g.carries_unsafe_attr());
-                match (trait_def.unsafety, unsafe_attr, unsafety, polarity) {
-                    (_, _, Unsafety::Unsafe, hir::ImplPolarity::Negative) => {
-                        span_err!(self.tcx.sess,
-                                  item.span,
-                                  E0198,
-                                  "negative implementations are not unsafe");
-                    }
+                (Unsafety::Unsafe, _, Unsafety::Normal, hir::ImplPolarity::Positive) => {
+                    span_err!(
+                        self.tcx.sess,
+                        item.span,
+                        E0200,
+                        "the trait `{}` requires an `unsafe impl` declaration",
+                        trait_ref.print_only_trait_path()
+                    );
+                }
 
-                    (Unsafety::Normal, None, Unsafety::Unsafe, _) => {
-                        span_err!(self.tcx.sess,
-                                  item.span,
-                                  E0199,
-                                  "implementing the trait `{}` is not unsafe",
-                                  trait_ref);
-                    }
+                (
+                    Unsafety::Normal,
+                    Some(attr_name),
+                    Unsafety::Normal,
+                    hir::ImplPolarity::Positive,
+                ) => {
+                    span_err!(
+                        self.tcx.sess,
+                        item.span,
+                        E0569,
+                        "requires an `unsafe impl` declaration due to `#[{}]` attribute",
+                        attr_name
+                    );
+                }
 
-                    (Unsafety::Unsafe, _, Unsafety::Normal, hir::ImplPolarity::Positive) => {
-                        span_err!(self.tcx.sess,
-                                  item.span,
-                                  E0200,
-                                  "the trait `{}` requires an `unsafe impl` declaration",
-                                  trait_ref);
-                    }
-
-                    (Unsafety::Normal, Some(g), Unsafety::Normal, hir::ImplPolarity::Positive) =>
-                    {
-                        span_err!(self.tcx.sess,
-                                  item.span,
-                                  E0569,
-                                  "requires an `unsafe impl` declaration due to `#[{}]` attribute",
-                                  g.attr_name());
-                    }
-
-                    (_, _, Unsafety::Normal, hir::ImplPolarity::Negative) |
-                    (Unsafety::Unsafe, _, Unsafety::Unsafe, hir::ImplPolarity::Positive) |
-                    (Unsafety::Normal, Some(_), Unsafety::Unsafe, hir::ImplPolarity::Positive) |
-                    (Unsafety::Normal, None, Unsafety::Normal, _) => {
-                        // OK
-                    }
+                (_, _, Unsafety::Unsafe, hir::ImplPolarity::Negative) => {
+                    // Reported in AST validation
+                    self.tcx.sess.delay_span_bug(item.span, "unsafe negative impl");
+                }
+                (_, _, Unsafety::Normal, hir::ImplPolarity::Negative)
+                | (Unsafety::Unsafe, _, Unsafety::Unsafe, hir::ImplPolarity::Positive)
+                | (Unsafety::Normal, Some(_), Unsafety::Unsafe, hir::ImplPolarity::Positive)
+                | (Unsafety::Normal, None, Unsafety::Normal, _) => {
+                    // OK
                 }
             }
         }
     }
 }
 
-impl<'cx, 'tcx, 'v> ItemLikeVisitor<'v> for UnsafetyChecker<'cx, 'tcx> {
-    fn visit_item(&mut self, item: &'v hir::Item) {
-        match item.node {
-            hir::ItemDefaultImpl(unsafety, _) => {
-                self.check_unsafety_coherence(item, None, unsafety, hir::ImplPolarity::Positive);
-            }
-            hir::ItemImpl(unsafety, polarity, _, ref generics, ..) => {
-                self.check_unsafety_coherence(item, Some(generics), unsafety, polarity);
-            }
-            _ => {}
+impl ItemLikeVisitor<'v> for UnsafetyChecker<'tcx> {
+    fn visit_item(&mut self, item: &'v hir::Item<'v>) {
+        if let hir::ItemKind::Impl(unsafety, polarity, _, ref generics, ..) = item.kind {
+            self.check_unsafety_coherence(item, Some(generics), unsafety, polarity);
         }
     }
 
-    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem) {
-    }
+    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'_>) {}
 
-    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem) {
-    }
+    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'_>) {}
 }

@@ -1,18 +1,8 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
+use core::num::dec2flt::rawfp::RawFloat;
+use core::num::dec2flt::rawfp::{fp_to_float, next_float, prev_float, round_normal};
+use core::num::diy_float::Fp;
 use std::f32;
 use std::f64;
-use core::num::diy_float::Fp;
-use core::num::dec2flt::rawfp::{fp_to_float, prev_float, next_float, round_normal};
-use core::num::dec2flt::rawfp::RawFloat;
 
 fn integer_decode(f: f64) -> (u64, i16, i8) {
     RawFloat::integer_decode(f)
@@ -63,16 +53,23 @@ fn integers_to_f64() {
     assert_eq!(fp_to_float::<f64>(Fp { f: 4, e: -3 }), 0.5);
 }
 
-const SOME_FLOATS: [f64; 9] =
-    [0.1f64, 33.568, 42.1e-5, 777.0e9, 1.1111, 0.347997,
-     9843579834.35892, 12456.0e-150, 54389573.0e-150];
-
+const SOME_FLOATS: [f64; 9] = [
+    0.1f64,
+    33.568,
+    42.1e-5,
+    777.0e9,
+    1.1111,
+    0.347997,
+    9843579834.35892,
+    12456.0e-150,
+    54389573.0e-150,
+];
 
 #[test]
 fn human_f64_roundtrip() {
     for &x in &SOME_FLOATS {
         let (f, e, _) = integer_decode(x);
-        let fp = Fp { f: f, e: e};
+        let fp = Fp { f: f, e: e };
         assert_eq!(fp_to_float::<f64>(fp), x);
     }
 }
@@ -86,6 +83,7 @@ fn rounding_overflow() {
     assert_eq!(rounded.k, adjusted_k + 1);
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn prev_float_monotonic() {
     let mut x = 1.0;
@@ -121,6 +119,7 @@ fn next_float_inf() {
     assert_eq!(next_float(f64::INFINITY), f64::INFINITY);
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn next_prev_identity() {
     for &x in &SOME_FLOATS {
@@ -131,6 +130,7 @@ fn next_prev_identity() {
     }
 }
 
+#[cfg_attr(all(target_arch = "wasm32", target_os = "emscripten"), ignore)] // issue 42630
 #[test]
 fn next_float_monotonic() {
     let mut x = 0.49999999999999;

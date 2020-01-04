@@ -1,19 +1,14 @@
-#!/bin/bash
-# Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-# file at the top-level directory of this distribution and at
-# http://rust-lang.org/COPYRIGHT.
-#
-# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-# http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-# <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-# option. This file may not be copied, modified, or distributed
-# except according to those terms.
+#!/usr/bin/env bash
 
 set -ex
 source shared.sh
 
 VERSION=1.0.2k
-URL=https://s3.amazonaws.com/rust-lang-ci/rust-ci-mirror/openssl-$VERSION.tar.gz
+
+# This needs to be downloaded directly from S3, it can't go through the CDN.
+# That's because the CDN is backed by CloudFront, which requires SNI and TLSv1
+# (without paying an absurd amount of money).
+URL=https://rust-lang-ci-mirrors.s3-us-west-1.amazonaws.com/rustc/openssl-$VERSION.tar.gz
 
 curl $URL | tar xzf -
 

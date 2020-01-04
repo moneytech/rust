@@ -1,30 +1,22 @@
-error[E0599]: no method named `count` found for type `std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:17:39: 17:53]>` in the current scope
-  --> $DIR/issue-36053-2.rs:17:55
+error[E0599]: no method named `count` found for type `std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:7:39: 7:53]>` in the current scope
+  --> $DIR/issue-36053-2.rs:7:55
    |
-17 |     once::<&str>("str").fuse().filter(|a: &str| true).count();
-   |                                                       ^^^^^
+LL |     once::<&str>("str").fuse().filter(|a: &str| true).count();
+   |                                                       ^^^^^ method not found in `std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:7:39: 7:53]>`
    |
    = note: the method `count` exists but the following trait bounds were not satisfied:
-           `[closure@$DIR/issue-36053-2.rs:17:39: 17:53] : std::ops::FnMut<(&_,)>`
-           `std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:17:39: 17:53]> : std::iter::Iterator`
+           `&mut std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:7:39: 7:53]> : std::iter::Iterator`
+           `std::iter::Filter<std::iter::Fuse<std::iter::Once<&str>>, [closure@$DIR/issue-36053-2.rs:7:39: 7:53]> : std::iter::Iterator`
 
-error[E0281]: type mismatch: `[closure@$DIR/issue-36053-2.rs:17:39: 17:53]` implements the trait `for<'r> std::ops::FnMut<(&'r str,)>`, but the trait `for<'r> std::ops::FnMut<(&'r &str,)>` is required
-  --> $DIR/issue-36053-2.rs:17:32
+error[E0631]: type mismatch in closure arguments
+  --> $DIR/issue-36053-2.rs:7:32
    |
-17 |     once::<&str>("str").fuse().filter(|a: &str| true).count();
-   |                                ^^^^^^ -------------- implements `for<'r> std::ops::FnMut<(&'r str,)>`
+LL |     once::<&str>("str").fuse().filter(|a: &str| true).count();
+   |                                ^^^^^^ -------------- found signature of `for<'r> fn(&'r str) -> _`
    |                                |
-   |                                requires `for<'r> std::ops::FnMut<(&'r &str,)>`
-   |                                expected &str, found str
+   |                                expected signature of `for<'r> fn(&'r &str) -> _`
 
-error[E0281]: type mismatch: `[closure@$DIR/issue-36053-2.rs:17:39: 17:53]` implements the trait `for<'r> std::ops::FnOnce<(&'r str,)>`, but the trait `for<'r> std::ops::FnOnce<(&'r &str,)>` is required
-  --> $DIR/issue-36053-2.rs:17:32
-   |
-17 |     once::<&str>("str").fuse().filter(|a: &str| true).count();
-   |                                ^^^^^^ -------------- implements `for<'r> std::ops::FnOnce<(&'r str,)>`
-   |                                |
-   |                                requires `for<'r> std::ops::FnOnce<(&'r &str,)>`
-   |                                expected &str, found str
+error: aborting due to 2 previous errors
 
-error: aborting due to previous error(s)
-
+Some errors have detailed explanations: E0599, E0631.
+For more information about an error, try `rustc --explain E0599`.

@@ -1,11 +1,9 @@
 error[E0425]: cannot find value `cx` in this scope
-  --> $DIR/unresolved_static_type_field.rs:19:11
+  --> $DIR/unresolved_static_type_field.rs:9:11
    |
-19 |         f(cx);
-   |           ^^
-   |           |
-   |           did you mean `self.cx`?
-   |           `self` value is only available in methods with `self` parameter
+LL |         f(cx);
+   |           ^^ a field by this name exists in `Self`
 
-error: aborting due to previous error(s)
+error: aborting due to previous error
 
+For more information about this error, try `rustc --explain E0425`.

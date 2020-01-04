@@ -1,18 +1,9 @@
-// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // min-lldb-version: 310
+// ignore-cdb: Fails with exit code 0xc0000135 ("the application failed to initialize properly")
 
-// aux-build:issue13213aux.rs
+// aux-build:issue-13213-aux.rs
 
-extern crate issue13213aux;
+extern crate issue_13213_aux;
 
 // compile-flags:-g
 
@@ -20,6 +11,6 @@ extern crate issue13213aux;
 // statics that are marked with AvailableExternallyLinkage in the importing crate, may actually not
 // be available because they have been optimized out from the exporting crate.
 fn main() {
-    let b: issue13213aux::S = issue13213aux::A;
+    let b: issue_13213_aux::S = issue_13213_aux::A;
     println!("Nothing to do here...");
 }

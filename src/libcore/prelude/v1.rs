@@ -1,13 +1,3 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! The core prelude
 //!
 //! This module is intended for users of libcore which do not link to libstd as
@@ -16,52 +6,64 @@
 
 #![stable(feature = "core_prelude", since = "1.4.0")]
 
-// Reexported core operators
+// Re-exported core operators
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use marker::{Copy, Send, Sized, Sync};
+pub use crate::marker::{Copy, Send, Sized, Sync, Unpin};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use ops::{Drop, Fn, FnMut, FnOnce};
+pub use crate::ops::{Drop, Fn, FnMut, FnOnce};
 
-// Reexported functions
+// Re-exported functions
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use mem::drop;
+pub use crate::mem::drop;
 
-// Reexported types and traits
+// Re-exported types and traits
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use clone::Clone;
+pub use crate::clone::Clone;
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use cmp::{PartialEq, PartialOrd, Eq, Ord};
+pub use crate::cmp::{Eq, Ord, PartialEq, PartialOrd};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use convert::{AsRef, AsMut, Into, From};
+pub use crate::convert::{AsMut, AsRef, From, Into};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use default::Default;
+pub use crate::default::Default;
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use iter::{Iterator, Extend, IntoIterator};
+pub use crate::iter::{DoubleEndedIterator, ExactSizeIterator};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use iter::{DoubleEndedIterator, ExactSizeIterator};
+pub use crate::iter::{Extend, IntoIterator, Iterator};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use option::Option::{self, Some, None};
+pub use crate::option::Option::{self, None, Some};
 #[stable(feature = "core_prelude", since = "1.4.0")]
 #[doc(no_inline)]
-pub use result::Result::{self, Ok, Err};
+pub use crate::result::Result::{self, Err, Ok};
 
-// Reexported extension traits for primitive types
-#[stable(feature = "core_prelude", since = "1.4.0")]
+// Re-exported built-in macros
+#[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
 #[doc(no_inline)]
-pub use slice::SliceExt;
-#[stable(feature = "core_prelude", since = "1.4.0")]
+pub use crate::fmt::macros::Debug;
+#[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
 #[doc(no_inline)]
-pub use str::StrExt;
-#[stable(feature = "core_prelude", since = "1.4.0")]
+pub use crate::hash::macros::Hash;
+
+#[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
 #[doc(no_inline)]
-pub use char::CharExt;
+pub use crate::{
+    asm, assert, cfg, column, compile_error, concat, concat_idents, env, file, format_args,
+    format_args_nl, global_asm, include, include_bytes, include_str, line, log_syntax, module_path,
+    option_env, stringify, trace_macros,
+};
+
+#[stable(feature = "builtin_macro_prelude", since = "1.38.0")]
+#[allow(deprecated)]
+#[doc(no_inline)]
+pub use crate::macros::builtin::{
+    bench, global_allocator, test, test_case, RustcDecodable, RustcEncodable,
+};

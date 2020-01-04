@@ -1,24 +1,16 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+//! This is a small server which is intended to run inside of an emulator or
+//! on a remote test device. This server pairs with the `remote-test-client`
+//! program in this repository. The `remote-test-client` connects to this
+//! server over a TCP socket and performs work such as:
+//!
+//! 1. Pushing shared libraries to the server
+//! 2. Running tests through the server
+//!
+//! The server supports running tests concurrently and also supports tests
+//! themselves having support libraries. All data over the TCP sockets is in a
+//! basically custom format suiting our needs.
 
-/// This is a small server which is intended to run inside of an emulator or
-/// on a remote test device. This server pairs with the `remote-test-client`
-/// program in this repository. The `remote-test-client` connects to this
-/// server over a TCP socket and performs work such as:
-///
-/// 1. Pushing shared libraries to the server
-/// 2. Running tests through the server
-///
-/// The server supports running tests concurrently and also supports tests
-/// themselves having support libraries. All data over the TCP sockets is in a
-/// basically custom format suiting our needs.
+#![deny(warnings)]
 
 use std::cmp;
 use std::env;
@@ -30,18 +22,20 @@ use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str;
-use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 macro_rules! t {
-    ($e:expr) => (match $e {
-        Ok(e) => e,
-        Err(e) => panic!("{} failed with {}", stringify!($e), e),
-    })
+    ($e:expr) => {
+        match $e {
+            Ok(e) => e,
+            Err(e) => panic!("{} failed with {}", stringify!($e), e),
+        }
+    };
 }
 
-static TEST: AtomicUsize = ATOMIC_USIZE_INIT;
+static TEST: AtomicUsize = AtomicUsize::new(0);
 
 struct Config {
     pub remote: bool,
@@ -50,10 +44,7 @@ struct Config {
 
 impl Config {
     pub fn default() -> Config {
-        Config {
-            remote: false,
-            verbose: false,
-        }
+        Config { remote: false, verbose: false }
     }
 
     pub fn parse_args() -> Config {
@@ -64,7 +55,7 @@ impl Config {
             match &argument[..] {
                 "remote" => {
                     config.remote = true;
-                },
+                }
                 "verbose" | "-v" => {
                     config.verbose = true;
                 }
@@ -103,7 +94,7 @@ fn main() {
         let mut socket = t!(socket);
         let mut buf = [0; 4];
         if socket.read_exact(&mut buf).is_err() {
-            continue
+            continue;
         }
         if &buf[..] == b"ping" {
             t!(socket.write_all(b"pong"));
@@ -130,7 +121,7 @@ struct RemoveOnDrop<'a> {
     inner: &'a Path,
 }
 
-impl<'a> Drop for RemoveOnDrop<'a> {
+impl Drop for RemoveOnDrop<'_> {
     fn drop(&mut self) {
         t!(fs::remove_dir_all(self.inner));
     }
@@ -184,7 +175,7 @@ fn handle_run(socket: TcpStream, work: &Path, lock: &Mutex<()>) {
     // other thread created a child process with the file open for writing, and
     // we attempt to execute it, so we get an error.
     //
-    // This race is resolve by ensuring that only one thread can writ ethe file
+    // This race is resolve by ensuring that only one thread can write the file
     // and spawn a child process at once. Kinda an unfortunate solution, but we
     // don't have many other choices with this sort of setup!
     //
@@ -215,15 +206,12 @@ fn handle_run(socket: TcpStream, work: &Path, lock: &Mutex<()>) {
     // Support libraries were uploaded to `work` earlier, so make sure that's
     // in `LD_LIBRARY_PATH`. Also include our own current dir which may have
     // had some libs uploaded.
-    cmd.env("LD_LIBRARY_PATH",
-            format!("{}:{}", work.display(), path.display()));
+    cmd.env("LD_LIBRARY_PATH", format!("{}:{}", work.display(), path.display()));
 
     // Spawn the child and ferry over stdout/stderr to the socket in a framed
     // fashion (poor man's style)
-    let mut child = t!(cmd.stdin(Stdio::null())
-                          .stdout(Stdio::piped())
-                          .stderr(Stdio::piped())
-                          .spawn());
+    let mut child =
+        t!(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn());
     drop(lock);
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
@@ -243,8 +231,8 @@ fn handle_run(socket: TcpStream, work: &Path, lock: &Mutex<()>) {
         which,
         (code >> 24) as u8,
         (code >> 16) as u8,
-        (code >>  8) as u8,
-        (code >>  0) as u8,
+        (code >> 8) as u8,
+        (code >> 0) as u8,
     ]));
 }
 
@@ -264,13 +252,12 @@ fn recv<B: BufRead>(dir: &Path, io: &mut B) -> PathBuf {
     let len = cmp::min(filename.len() - 1, 50);
     let dst = dir.join(t!(str::from_utf8(&filename[..len])));
     let amt = read_u32(io) as u64;
-    t!(io::copy(&mut io.take(amt),
-                &mut t!(File::create(&dst))));
+    t!(io::copy(&mut io.take(amt), &mut t!(File::create(&dst))));
     t!(fs::set_permissions(&dst, Permissions::from_mode(0o755)));
-    return dst
+    dst
 }
 
-fn my_copy(src: &mut Read, which: u8, dst: &Mutex<Write>) {
+fn my_copy(src: &mut dyn Read, which: u8, dst: &Mutex<dyn Write>) {
     let mut b = [0; 1024];
     loop {
         let n = t!(src.read(&mut b));
@@ -279,22 +266,22 @@ fn my_copy(src: &mut Read, which: u8, dst: &Mutex<Write>) {
             which,
             (n >> 24) as u8,
             (n >> 16) as u8,
-            (n >>  8) as u8,
-            (n >>  0) as u8,
+            (n >> 8) as u8,
+            (n >> 0) as u8,
         ]));
         if n > 0 {
             t!(dst.write_all(&b[..n]));
         } else {
-            break
+            break;
         }
     }
 }
 
-fn read_u32(r: &mut Read) -> u32 {
+fn read_u32(r: &mut dyn Read) -> u32 {
     let mut len = [0; 4];
     t!(r.read_exact(&mut len));
-    ((len[0] as u32) << 24) |
-    ((len[1] as u32) << 16) |
-    ((len[2] as u32) <<  8) |
-    ((len[3] as u32) <<  0)
+    ((len[0] as u32) << 24)
+        | ((len[1] as u32) << 16)
+        | ((len[2] as u32) << 8)
+        | ((len[3] as u32) << 0)
 }

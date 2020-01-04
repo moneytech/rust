@@ -1,23 +1,14 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // A first "spike" for incremental compilation: here, we change the
 // content of the `make` function, and we find that we can reuse the
 // `y` module entirely (but not the `x` module).
 
 // revisions:rpass1 rpass2
+// compile-flags: -Z query-dep-graph
 
 #![feature(rustc_attrs)]
 
 #![rustc_partition_reused(module="spike", cfg="rpass2")]
-#![rustc_partition_translated(module="spike-x", cfg="rpass2")]
+#![rustc_partition_codegened(module="spike-x", cfg="rpass2")]
 #![rustc_partition_reused(module="spike-y", cfg="rpass2")]
 
 mod x {

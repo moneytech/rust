@@ -1,24 +1,25 @@
 error[E0597]: `a` does not live long enough
-  --> $DIR/range-2.rs:20:5
+  --> $DIR/range-2.rs:7:9
    |
-17 |         &a..&b
-   |          - borrow occurs here
+LL |     let r = {
+   |         - borrow later stored here
 ...
-20 |     };
-   |     ^ `a` dropped here while still borrowed
-21 | }
-   | - borrowed value needs to live until here
+LL |         &a..&b
+   |         ^^ borrowed value does not live long enough
+LL |     };
+   |     - `a` dropped here while still borrowed
 
 error[E0597]: `b` does not live long enough
-  --> $DIR/range-2.rs:20:5
+  --> $DIR/range-2.rs:7:13
    |
-17 |         &a..&b
-   |              - borrow occurs here
+LL |     let r = {
+   |         - borrow later stored here
 ...
-20 |     };
-   |     ^ `b` dropped here while still borrowed
-21 | }
-   | - borrowed value needs to live until here
+LL |         &a..&b
+   |             ^^ borrowed value does not live long enough
+LL |     };
+   |     - `b` dropped here while still borrowed
 
-error: aborting due to previous error(s)
+error: aborting due to 2 previous errors
 
+For more information about this error, try `rustc --explain E0597`.

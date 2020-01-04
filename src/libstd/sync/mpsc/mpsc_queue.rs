@@ -1,13 +1,3 @@
-// Copyright 2017 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! A mostly lock-free multi-producer, single consumer queue.
 //!
 //! This module contains an implementation of a concurrent MPSC queue. This
@@ -23,11 +13,11 @@
 
 pub use self::PopResult::*;
 
-use alloc::boxed::Box;
-use core::ptr;
 use core::cell::UnsafeCell;
+use core::ptr;
 
-use sync::atomic::{AtomicPtr, Ordering};
+use crate::boxed::Box;
+use crate::sync::atomic::{AtomicPtr, Ordering};
 
 /// A result of the `pop` function.
 pub enum PopResult<T> {
@@ -55,15 +45,12 @@ pub struct Queue<T> {
     tail: UnsafeCell<*mut Node<T>>,
 }
 
-unsafe impl<T: Send> Send for Queue<T> { }
-unsafe impl<T: Send> Sync for Queue<T> { }
+unsafe impl<T: Send> Send for Queue<T> {}
+unsafe impl<T: Send> Sync for Queue<T> {}
 
 impl<T> Node<T> {
     unsafe fn new(v: Option<T>) -> *mut Node<T> {
-        Box::into_raw(box Node {
-            next: AtomicPtr::new(ptr::null_mut()),
-            value: v,
-        })
+        Box::into_raw(box Node { next: AtomicPtr::new(ptr::null_mut()), value: v })
     }
 }
 
@@ -72,10 +59,7 @@ impl<T> Queue<T> {
     /// one consumer.
     pub fn new() -> Queue<T> {
         let stub = unsafe { Node::new(None) };
-        Queue {
-            head: AtomicPtr::new(stub),
-            tail: UnsafeCell::new(stub),
-        }
+        Queue { head: AtomicPtr::new(stub), tail: UnsafeCell::new(stub) }
     }
 
     /// Pushes a new value onto this queue.
@@ -111,7 +95,7 @@ impl<T> Queue<T> {
                 return Data(ret);
             }
 
-            if self.head.load(Ordering::Acquire) == tail {Empty} else {Inconsistent}
+            if self.head.load(Ordering::Acquire) == tail { Empty } else { Inconsistent }
         }
     }
 }
@@ -131,10 +115,10 @@ impl<T> Drop for Queue<T> {
 
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
-    use sync::mpsc::channel;
-    use super::{Queue, Data, Empty, Inconsistent};
-    use sync::Arc;
-    use thread;
+    use super::{Data, Empty, Inconsistent, Queue};
+    use crate::sync::mpsc::channel;
+    use crate::sync::Arc;
+    use crate::thread;
 
     #[test]
     fn test_full() {
@@ -150,7 +134,7 @@ mod tests {
         let q = Queue::new();
         match q.pop() {
             Empty => {}
-            Inconsistent | Data(..) => panic!()
+            Inconsistent | Data(..) => panic!(),
         }
         let (tx, rx) = channel();
         let q = Arc::new(q);
@@ -158,7 +142,7 @@ mod tests {
         for _ in 0..nthreads {
             let tx = tx.clone();
             let q = q.clone();
-            thread::spawn(move|| {
+            thread::spawn(move || {
                 for i in 0..nmsgs {
                     q.push(i);
                 }
@@ -169,8 +153,8 @@ mod tests {
         let mut i = 0;
         while i < nthreads * nmsgs {
             match q.pop() {
-                Empty | Inconsistent => {},
-                Data(_) => { i += 1 }
+                Empty | Inconsistent => {}
+                Data(_) => i += 1,
             }
         }
         drop(tx);

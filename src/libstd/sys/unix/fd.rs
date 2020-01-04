@@ -1,23 +1,13 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+#![unstable(reason = "not public", issue = "none", feature = "fd")]
 
-#![unstable(reason = "not public", issue = "0", feature = "fd")]
+use crate::cmp;
+use crate::io::{self, Initializer, IoSlice, IoSliceMut, Read};
+use crate::mem;
+use crate::sync::atomic::{AtomicBool, Ordering};
+use crate::sys::cvt;
+use crate::sys_common::AsInner;
 
-use cmp;
-use io::{self, Read};
-use libc::{self, c_int, c_void, ssize_t};
-use mem;
-use sync::atomic::{AtomicBool, Ordering};
-use sys::cvt;
-use sys_common::AsInner;
-use sys_common::io::read_to_end_uninitialized;
+use libc::{c_int, c_void, ssize_t};
 
 #[derive(Debug)]
 pub struct FileDesc {
@@ -42,12 +32,14 @@ fn max_len() -> usize {
 
 impl FileDesc {
     pub fn new(fd: c_int) -> FileDesc {
-        FileDesc { fd: fd }
+        FileDesc { fd }
     }
 
-    pub fn raw(&self) -> c_int { self.fd }
+    pub fn raw(&self) -> c_int {
+        self.fd
+    }
 
-    /// Extracts the actual filedescriptor without closing it.
+    /// Extracts the actual file descriptor without closing it.
     pub fn into_raw(self) -> c_int {
         let fd = self.fd;
         mem::forget(self);
@@ -56,9 +48,18 @@ impl FileDesc {
 
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let ret = cvt(unsafe {
-            libc::read(self.fd,
-                       buf.as_mut_ptr() as *mut c_void,
-                       cmp::min(buf.len(), max_len()))
+            libc::read(self.fd, buf.as_mut_ptr() as *mut c_void, cmp::min(buf.len(), max_len()))
+        })?;
+        Ok(ret as usize)
+    }
+
+    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        let ret = cvt(unsafe {
+            libc::readv(
+                self.fd,
+                bufs.as_ptr() as *const libc::iovec,
+                cmp::min(bufs.len(), c_int::max_value() as usize) as c_int,
+            )
         })?;
         Ok(ret as usize)
     }
@@ -73,30 +74,44 @@ impl FileDesc {
         use super::android::cvt_pread64;
 
         #[cfg(not(target_os = "android"))]
-        unsafe fn cvt_pread64(fd: c_int, buf: *mut c_void, count: usize, offset: i64)
-            -> io::Result<isize>
-        {
-            #[cfg(any(target_os = "linux", target_os = "emscripten"))]
-            use libc::pread64;
-            #[cfg(not(any(target_os = "linux", target_os = "emscripten")))]
+        unsafe fn cvt_pread64(
+            fd: c_int,
+            buf: *mut c_void,
+            count: usize,
+            offset: i64,
+        ) -> io::Result<isize> {
+            #[cfg(not(target_os = "linux"))]
             use libc::pread as pread64;
+            #[cfg(target_os = "linux")]
+            use libc::pread64;
             cvt(pread64(fd, buf, count, offset))
         }
 
         unsafe {
-            cvt_pread64(self.fd,
-                        buf.as_mut_ptr() as *mut c_void,
-                        cmp::min(buf.len(), max_len()),
-                        offset as i64)
-                .map(|n| n as usize)
+            cvt_pread64(
+                self.fd,
+                buf.as_mut_ptr() as *mut c_void,
+                cmp::min(buf.len(), max_len()),
+                offset as i64,
+            )
+            .map(|n| n as usize)
         }
     }
 
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         let ret = cvt(unsafe {
-            libc::write(self.fd,
-                        buf.as_ptr() as *const c_void,
-                        cmp::min(buf.len(), max_len()))
+            libc::write(self.fd, buf.as_ptr() as *const c_void, cmp::min(buf.len(), max_len()))
+        })?;
+        Ok(ret as usize)
+    }
+
+    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        let ret = cvt(unsafe {
+            libc::writev(
+                self.fd,
+                bufs.as_ptr() as *const libc::iovec,
+                cmp::min(bufs.len(), c_int::max_value() as usize) as c_int,
+            )
         })?;
         Ok(ret as usize)
     }
@@ -106,41 +121,61 @@ impl FileDesc {
         use super::android::cvt_pwrite64;
 
         #[cfg(not(target_os = "android"))]
-        unsafe fn cvt_pwrite64(fd: c_int, buf: *const c_void, count: usize, offset: i64)
-            -> io::Result<isize>
-        {
-            #[cfg(any(target_os = "linux", target_os = "emscripten"))]
-            use libc::pwrite64;
-            #[cfg(not(any(target_os = "linux", target_os = "emscripten")))]
+        unsafe fn cvt_pwrite64(
+            fd: c_int,
+            buf: *const c_void,
+            count: usize,
+            offset: i64,
+        ) -> io::Result<isize> {
+            #[cfg(not(target_os = "linux"))]
             use libc::pwrite as pwrite64;
+            #[cfg(target_os = "linux")]
+            use libc::pwrite64;
             cvt(pwrite64(fd, buf, count, offset))
         }
 
         unsafe {
-            cvt_pwrite64(self.fd,
-                         buf.as_ptr() as *const c_void,
-                         cmp::min(buf.len(), max_len()),
-                         offset as i64)
-                .map(|n| n as usize)
+            cvt_pwrite64(
+                self.fd,
+                buf.as_ptr() as *const c_void,
+                cmp::min(buf.len(), max_len()),
+                offset as i64,
+            )
+            .map(|n| n as usize)
         }
     }
 
-    #[cfg(not(any(target_env = "newlib",
-                  target_os = "solaris",
-                  target_os = "emscripten",
-                  target_os = "fuchsia",
-                  target_os = "haiku")))]
+    #[cfg(target_os = "linux")]
+    pub fn get_cloexec(&self) -> io::Result<bool> {
+        unsafe { Ok((cvt(libc::fcntl(self.fd, libc::F_GETFD))? & libc::FD_CLOEXEC) != 0) }
+    }
+
+    #[cfg(not(any(
+        target_env = "newlib",
+        target_os = "solaris",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "l4re",
+        target_os = "linux",
+        target_os = "haiku",
+        target_os = "redox"
+    )))]
     pub fn set_cloexec(&self) -> io::Result<()> {
         unsafe {
             cvt(libc::ioctl(self.fd, libc::FIOCLEX))?;
             Ok(())
         }
     }
-    #[cfg(any(target_env = "newlib",
-              target_os = "solaris",
-              target_os = "emscripten",
-              target_os = "fuchsia",
-              target_os = "haiku"))]
+    #[cfg(any(
+        target_env = "newlib",
+        target_os = "solaris",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "l4re",
+        target_os = "linux",
+        target_os = "haiku",
+        target_os = "redox"
+    ))]
     pub fn set_cloexec(&self) -> io::Result<()> {
         unsafe {
             let previous = cvt(libc::fcntl(self.fd, libc::F_GETFD))?;
@@ -195,7 +230,7 @@ impl FileDesc {
         // [1]: http://comments.gmane.org/gmane.linux.lib.musl.general/2963
         #[cfg(any(target_os = "android", target_os = "haiku"))]
         use libc::F_DUPFD as F_DUPFD_CLOEXEC;
-        #[cfg(not(any(target_os = "android", target_os="haiku")))]
+        #[cfg(not(any(target_os = "android", target_os = "haiku")))]
         use libc::F_DUPFD_CLOEXEC;
 
         let make_filedesc = |fd| {
@@ -203,8 +238,7 @@ impl FileDesc {
             fd.set_cloexec()?;
             Ok(fd)
         };
-        static TRY_CLOEXEC: AtomicBool =
-            AtomicBool::new(!cfg!(target_os = "android"));
+        static TRY_CLOEXEC: AtomicBool = AtomicBool::new(!cfg!(target_os = "android"));
         let fd = self.raw();
         if TRY_CLOEXEC.load(Ordering::Relaxed) {
             match cvt(unsafe { libc::fcntl(fd, F_DUPFD_CLOEXEC, 0) }) {
@@ -216,7 +250,7 @@ impl FileDesc {
                         make_filedesc(fd)?
                     } else {
                         FileDesc::new(fd)
-                    })
+                    });
                 }
                 Err(ref e) if e.raw_os_error() == Some(libc::EINVAL) => {
                     TRY_CLOEXEC.store(false, Ordering::Relaxed);
@@ -233,13 +267,16 @@ impl<'a> Read for &'a FileDesc {
         (**self).read(buf)
     }
 
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
-        unsafe { read_to_end_uninitialized(self, buf) }
+    #[inline]
+    unsafe fn initializer(&self) -> Initializer {
+        Initializer::nop()
     }
 }
 
 impl AsInner<c_int> for FileDesc {
-    fn as_inner(&self) -> &c_int { &self.fd }
+    fn as_inner(&self) -> &c_int {
+        &self.fd
+    }
 }
 
 impl Drop for FileDesc {
@@ -248,7 +285,7 @@ impl Drop for FileDesc {
         // reason for this is that if an error occurs we don't actually know if
         // the file descriptor was closed or not, and if we retried (for
         // something like EINTR), we might close another valid file descriptor
-        // (opened after we closed ours.
+        // opened after we closed ours.
         let _ = unsafe { libc::close(self.fd) };
     }
 }

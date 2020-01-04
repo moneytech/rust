@@ -1,15 +1,5 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
-use fmt;
-use sync::{Mutex, Condvar};
+use crate::fmt;
+use crate::sync::{Condvar, Mutex};
 
 /// A barrier enables multiple threads to synchronize the beginning
 /// of some computation.
@@ -69,7 +59,7 @@ pub struct BarrierWaitResult(bool);
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for Barrier {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("Barrier { .. }")
     }
 }
@@ -92,10 +82,7 @@ impl Barrier {
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn new(n: usize) -> Barrier {
         Barrier {
-            lock: Mutex::new(BarrierState {
-                count: 0,
-                generation_id: 0,
-            }),
+            lock: Mutex::new(BarrierState { count: 0, generation_id: 0 }),
             cvar: Condvar::new(),
             num_threads: n,
         }
@@ -145,14 +132,13 @@ impl Barrier {
         if lock.count < self.num_threads {
             // We need a while loop to guard against spurious wakeups.
             // http://en.wikipedia.org/wiki/Spurious_wakeup
-            while local_gen == lock.generation_id &&
-                  lock.count < self.num_threads {
+            while local_gen == lock.generation_id && lock.count < self.num_threads {
                 lock = self.cvar.wait(lock).unwrap();
             }
             BarrierWaitResult(false)
         } else {
             lock.count = 0;
-            lock.generation_id += 1;
+            lock.generation_id = lock.generation_id.wrapping_add(1);
             self.cvar.notify_all();
             BarrierWaitResult(true)
         }
@@ -161,15 +147,13 @@ impl Barrier {
 
 #[stable(feature = "std_debug", since = "1.16.0")]
 impl fmt::Debug for BarrierWaitResult {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("BarrierWaitResult")
-            .field("is_leader", &self.is_leader())
-            .finish()
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BarrierWaitResult").field("is_leader", &self.is_leader()).finish()
     }
 }
 
 impl BarrierWaitResult {
-    /// Returns whether this thread from [`wait`] is the "leader thread".
+    /// Returns `true` if this thread from [`wait`] is the "leader thread".
     ///
     /// Only one thread will have `true` returned from their result, all other
     /// threads will have `false` returned.
@@ -186,14 +170,16 @@ impl BarrierWaitResult {
     /// println!("{:?}", barrier_wait_result.is_leader());
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub fn is_leader(&self) -> bool { self.0 }
+    pub fn is_leader(&self) -> bool {
+        self.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use sync::{Arc, Barrier};
-    use sync::mpsc::{channel, TryRecvError};
-    use thread;
+    use crate::sync::mpsc::{channel, TryRecvError};
+    use crate::sync::{Arc, Barrier};
+    use crate::thread;
 
     #[test]
     #[cfg_attr(target_os = "emscripten", ignore)]
@@ -206,7 +192,7 @@ mod tests {
         for _ in 0..N - 1 {
             let c = barrier.clone();
             let tx = tx.clone();
-            thread::spawn(move|| {
+            thread::spawn(move || {
                 tx.send(c.wait().is_leader()).unwrap();
             });
         }

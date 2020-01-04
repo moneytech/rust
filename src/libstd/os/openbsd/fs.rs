@@ -1,24 +1,14 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 #![stable(feature = "metadata_ext", since = "1.1.0")]
 
-use libc;
-
-use fs::Metadata;
-use sys_common::AsInner;
+use crate::fs::Metadata;
+use crate::sys_common::AsInner;
 
 #[allow(deprecated)]
-use os::openbsd::raw;
+use crate::os::openbsd::raw;
 
-/// OS-specific extension methods for `fs::Metadata`
+/// OS-specific extensions to [`fs::Metadata`].
+///
+/// [`fs::Metadata`]: ../../../../std/fs/struct.Metadata.html
 #[stable(feature = "metadata_ext", since = "1.1.0")]
 pub trait MetadataExt {
     /// Gain a reference to the underlying `stat` structure which contains
@@ -28,9 +18,11 @@ pub trait MetadataExt {
     /// Unix platforms. The `os::unix::fs::MetadataExt` trait contains the
     /// cross-Unix abstractions contained within the raw stat.
     #[stable(feature = "metadata_ext", since = "1.1.0")]
-    #[rustc_deprecated(since = "1.8.0",
-                       reason = "deprecated in favor of the accessor \
-                                 methods of this trait")]
+    #[rustc_deprecated(
+        since = "1.8.0",
+        reason = "deprecated in favor of the accessor \
+                  methods of this trait"
+    )]
     #[allow(deprecated)]
     fn as_raw_stat(&self) -> &raw::stat;
 
@@ -80,10 +72,7 @@ pub trait MetadataExt {
 impl MetadataExt for Metadata {
     #[allow(deprecated)]
     fn as_raw_stat(&self) -> &raw::stat {
-        unsafe {
-            &*(self.as_inner().as_inner() as *const libc::stat
-                                          as *const raw::stat)
-        }
+        unsafe { &*(self.as_inner().as_inner() as *const libc::stat as *const raw::stat) }
     }
     fn st_dev(&self) -> u64 {
         self.as_inner().as_inner().st_dev as u64
@@ -146,4 +135,3 @@ impl MetadataExt for Metadata {
         self.as_inner().as_inner().st_flags as u32
     }
 }
-

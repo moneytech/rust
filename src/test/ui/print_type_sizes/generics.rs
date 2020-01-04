@@ -1,18 +1,14 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // compile-flags: -Z print-type-sizes
+// build-pass (FIXME(62277): could be check-pass?)
+// ignore-pass
+// ^-- needed because `--pass check` does not emit the output needed.
+//     FIXME: consider using an attribute instead of side-effects.
 
 // This file illustrates how generics are handled: types have to be
 // monomorphized, in the MIR of the original function in which they
 // occur, to have their size reported.
+
+#![feature(start)]
 
 // In an ad-hoc attempt to avoid the injection of unwinding code
 // (which clutters the output of `-Z print-type-sizes` with types from
@@ -27,7 +23,7 @@
 //     Copy.
 //
 //     (I suspect this reflect some naivety within the rust compiler
-//      itself; it should be checking for drop glue, i.e. a destructor
+//      itself; it should be checking for drop glue, i.e., a destructor
 //      somewhere in the monomorphized types. It should not matter whether
 //      the type is Copy.)
 #[derive(Copy, Clone)]
@@ -65,9 +61,11 @@ pub fn f1<T:Copy>(x: T) {
         Pair::new(FiftyBytes::new(), FiftyBytes::new());
 }
 
-pub fn main() {
+#[start]
+fn start(_: isize, _: *const *const u8) -> isize {
     let _b: Pair<u8> = Pair::new(0, 0);
     let _s: Pair<SevenBytes> = Pair::new(SevenBytes::new(), SevenBytes::new());
-    let _z: ZeroSized = ZeroSized;
+    let ref _z: ZeroSized = ZeroSized;
     f1::<SevenBytes>(SevenBytes::new());
+    0
 }

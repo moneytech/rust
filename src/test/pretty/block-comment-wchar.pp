@@ -1,13 +1,3 @@
-// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 // This is meant as a test case for Issue 3961.
 //
 // Test via: rustc --pretty normal src/test/pretty/block-comment-wchar.rs
@@ -109,8 +99,5 @@ fn main() {
          '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
          '\u{2009}', '\u{200A}', '\u{2028}', '\u{2029}', '\u{202F}',
          '\u{205F}', '\u{3000}'];
-    for c in &chars {
-        let ws = c.is_whitespace();
-        println!("{} {}" , c , ws);
-    }
+    for c in &chars { let ws = c.is_whitespace(); println!("{} {}", c, ws); }
 }

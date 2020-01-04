@@ -1,118 +1,34 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
-// file at the top-level directory of this distribution and at
-// http://rust-lang.org/COPYRIGHT.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Various utility functions used throughout rustbuild.
 //!
 //! Simple things like testing the various filesystem operations here and there,
 //! not a lot of interesting happenings here unfortunately.
 
 use std::env;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, Instant};
+use std::str;
+use std::time::Instant;
 
-use filetime::{self, FileTime};
+use build_helper::t;
+
+use crate::builder::Builder;
+use crate::cache::Interned;
+use crate::config::Config;
 
 /// Returns the `name` as the filename of a static library for `target`.
 pub fn staticlib(name: &str, target: &str) -> String {
-    if target.contains("windows") {
-        format!("{}.lib", name)
-    } else {
-        format!("lib{}.a", name)
-    }
-}
-
-/// Copies a file from `src` to `dst`, attempting to use hard links and then
-/// falling back to an actually filesystem copy if necessary.
-pub fn copy(src: &Path, dst: &Path) {
-    // A call to `hard_link` will fail if `dst` exists, so remove it if it
-    // already exists so we can try to help `hard_link` succeed.
-    let _ = fs::remove_file(&dst);
-
-    // Attempt to "easy copy" by creating a hard link (symlinks don't work on
-    // windows), but if that fails just fall back to a slow `copy` operation.
-    // let res = fs::hard_link(src, dst);
-    let res = fs::copy(src, dst);
-    if let Err(e) = res {
-        panic!("failed to copy `{}` to `{}`: {}", src.display(),
-               dst.display(), e)
-    }
-    let metadata = t!(src.metadata());
-    t!(fs::set_permissions(dst, metadata.permissions()));
-    let atime = FileTime::from_last_access_time(&metadata);
-    let mtime = FileTime::from_last_modification_time(&metadata);
-    t!(filetime::set_file_times(dst, atime, mtime));
-
-}
-
-/// Copies the `src` directory recursively to `dst`. Both are assumed to exist
-/// when this function is called.
-pub fn cp_r(src: &Path, dst: &Path) {
-    for f in t!(fs::read_dir(src)) {
-        let f = t!(f);
-        let path = f.path();
-        let name = path.file_name().unwrap();
-        let dst = dst.join(name);
-        if t!(f.file_type()).is_dir() {
-            t!(fs::create_dir_all(&dst));
-            cp_r(&path, &dst);
-        } else {
-            let _ = fs::remove_file(&dst);
-            copy(&path, &dst);
-        }
-    }
-}
-
-/// Copies the `src` directory recursively to `dst`. Both are assumed to exist
-/// when this function is called. Unwanted files or directories can be skipped
-/// by returning `false` from the filter function.
-pub fn cp_filtered(src: &Path, dst: &Path, filter: &Fn(&Path) -> bool) {
-    // Inner function does the actual work
-    fn recurse(src: &Path, dst: &Path, relative: &Path, filter: &Fn(&Path) -> bool) {
-        for f in t!(fs::read_dir(src)) {
-            let f = t!(f);
-            let path = f.path();
-            let name = path.file_name().unwrap();
-            let dst = dst.join(name);
-            let relative = relative.join(name);
-            // Only copy file or directory if the filter function returns true
-            if filter(&relative) {
-                if t!(f.file_type()).is_dir() {
-                    let _ = fs::remove_dir_all(&dst);
-                    t!(fs::create_dir(&dst));
-                    recurse(&path, &dst, &relative, filter);
-                } else {
-                    let _ = fs::remove_file(&dst);
-                    copy(&path, &dst);
-                }
-            }
-        }
-    }
-    // Immediately recurse with an empty relative path
-    recurse(src, dst, Path::new(""), filter)
+    if target.contains("windows") { format!("{}.lib", name) } else { format!("lib{}.a", name) }
 }
 
 /// Given an executable called `name`, return the filename for the
 /// executable for a particular target.
 pub fn exe(name: &str, target: &str) -> String {
-    if target.contains("windows") {
-        format!("{}.exe", name)
-    } else {
-        name.to_string()
-    }
+    if target.contains("windows") { format!("{}.exe", name) } else { name.to_string() }
 }
 
-/// Returns whether the file name given looks like a dynamic library.
+/// Returns `true` if the file name given looks like a dynamic library.
 pub fn is_dylib(name: &str) -> bool {
     name.ends_with(".dylib") || name.ends_with(".so") || name.ends_with(".dll")
 }
@@ -120,7 +36,7 @@ pub fn is_dylib(name: &str) -> bool {
 /// Returns the corresponding relative library directory that the compiler's
 /// dylibs will be found in.
 pub fn libdir(target: &str) -> &'static str {
-    if target.contains("windows") {"bin"} else {"lib"}
+    if target.contains("windows") { "bin" } else { "lib" }
 }
 
 /// Adds a list of lookup paths to `cmd`'s dynamic library lookup path.
@@ -149,8 +65,11 @@ pub fn dylib_path_var() -> &'static str {
 /// Parses the `dylib_path_var()` environment variable, returning a list of
 /// paths that are members of this lookup path.
 pub fn dylib_path() -> Vec<PathBuf> {
-    env::split_paths(&env::var_os(dylib_path_var()).unwrap_or(OsString::new()))
-        .collect()
+    let var = match env::var_os(dylib_path_var()) {
+        Some(v) => v,
+        None => return vec![],
+    };
+    env::split_paths(&var).collect()
 }
 
 /// `push` all components to `buf`. On windows, append `.exe` to the last component.
@@ -162,34 +81,34 @@ pub fn push_exe_path(mut buf: PathBuf, components: &[&str]) -> PathBuf {
         file.push_str(".exe");
     }
 
-    for c in components {
-        buf.push(c);
-    }
-
+    buf.extend(components);
     buf.push(file);
 
     buf
 }
 
-pub struct TimeIt(Instant);
+pub struct TimeIt(bool, Instant);
 
 /// Returns an RAII structure that prints out how long it took to drop.
-pub fn timeit() -> TimeIt {
-    TimeIt(Instant::now())
+pub fn timeit(builder: &Builder<'_>) -> TimeIt {
+    TimeIt(builder.config.dry_run, Instant::now())
 }
 
 impl Drop for TimeIt {
     fn drop(&mut self) {
-        let time = self.0.elapsed();
-        println!("\tfinished in {}.{:03}",
-                 time.as_secs(),
-                 time.subsec_nanos() / 1_000_000);
+        let time = self.1.elapsed();
+        if !self.0 {
+            println!("\tfinished in {}.{:03}", time.as_secs(), time.subsec_nanos() / 1_000_000);
+        }
     }
 }
 
 /// Symlinks two directories, using junctions on Windows and normal symlinks on
 /// Unix.
-pub fn symlink_dir(src: &Path, dest: &Path) -> io::Result<()> {
+pub fn symlink_dir(config: &Config, src: &Path, dest: &Path) -> io::Result<()> {
+    if config.dry_run {
+        return Ok(());
+    }
     let _ = fs::remove_dir(dest);
     return symlink_dir_inner(src, dest);
 
@@ -207,11 +126,11 @@ pub fn symlink_dir(src: &Path, dest: &Path) -> io::Result<()> {
     //
     // Copied from std
     #[cfg(windows)]
-    #[allow(bad_style)]
+    #[allow(nonstandard_style)]
     fn symlink_dir_inner(target: &Path, junction: &Path) -> io::Result<()> {
-        use std::ptr;
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
+        use std::ptr;
 
         const MAXIMUM_REPARSE_DATA_BUFFER_SIZE: usize = 16 * 1024;
         const GENERIC_WRITE: DWORD = 0x40000000;
@@ -247,22 +166,26 @@ pub fn symlink_dir(src: &Path, dest: &Path) -> io::Result<()> {
         }
 
         extern "system" {
-            fn CreateFileW(lpFileName: LPCWSTR,
-                           dwDesiredAccess: DWORD,
-                           dwShareMode: DWORD,
-                           lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
-                           dwCreationDisposition: DWORD,
-                           dwFlagsAndAttributes: DWORD,
-                           hTemplateFile: HANDLE)
-                           -> HANDLE;
-            fn DeviceIoControl(hDevice: HANDLE,
-                               dwIoControlCode: DWORD,
-                               lpInBuffer: LPVOID,
-                               nInBufferSize: DWORD,
-                               lpOutBuffer: LPVOID,
-                               nOutBufferSize: DWORD,
-                               lpBytesReturned: LPDWORD,
-                               lpOverlapped: LPOVERLAPPED) -> BOOL;
+            fn CreateFileW(
+                lpFileName: LPCWSTR,
+                dwDesiredAccess: DWORD,
+                dwShareMode: DWORD,
+                lpSecurityAttributes: LPSECURITY_ATTRIBUTES,
+                dwCreationDisposition: DWORD,
+                dwFlagsAndAttributes: DWORD,
+                hTemplateFile: HANDLE,
+            ) -> HANDLE;
+            fn DeviceIoControl(
+                hDevice: HANDLE,
+                dwIoControlCode: DWORD,
+                lpInBuffer: LPVOID,
+                nInBufferSize: DWORD,
+                lpOutBuffer: LPVOID,
+                nOutBufferSize: DWORD,
+                lpBytesReturned: LPDWORD,
+                lpOverlapped: LPOVERLAPPED,
+            ) -> BOOL;
+            fn CloseHandle(hObject: HANDLE) -> BOOL;
         }
 
         fn to_u16s<S: AsRef<OsStr>>(s: S) -> io::Result<Vec<u16>> {
@@ -272,25 +195,26 @@ pub fn symlink_dir(src: &Path, dest: &Path) -> io::Result<()> {
         // We're using low-level APIs to create the junction, and these are more
         // picky about paths. For example, forward slashes cannot be used as a
         // path separator, so we should try to canonicalize the path first.
-        let target = try!(fs::canonicalize(target));
+        let target = fs::canonicalize(target)?;
 
-        try!(fs::create_dir(junction));
+        fs::create_dir(junction)?;
 
-        let path = try!(to_u16s(junction));
+        let path = to_u16s(junction)?;
 
         unsafe {
-            let h = CreateFileW(path.as_ptr(),
-                                GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                0 as *mut _,
-                                OPEN_EXISTING,
-                                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-                                ptr::null_mut());
+            let h = CreateFileW(
+                path.as_ptr(),
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                ptr::null_mut(),
+            );
 
             let mut data = [0u8; MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
-            let mut db = data.as_mut_ptr()
-                            as *mut REPARSE_MOUNTPOINT_DATA_BUFFER;
-            let buf = &mut (*db).ReparseTarget as *mut _;
+            let db = data.as_mut_ptr() as *mut REPARSE_MOUNTPOINT_DATA_BUFFER;
+            let buf = &mut (*db).ReparseTarget as *mut u16;
             let mut i = 0;
             // FIXME: this conversion is very hacky
             let v = br"\??\";
@@ -304,86 +228,24 @@ pub fn symlink_dir(src: &Path, dest: &Path) -> io::Result<()> {
             (*db).ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
             (*db).ReparseTargetMaximumLength = (i * 2) as WORD;
             (*db).ReparseTargetLength = ((i - 1) * 2) as WORD;
-            (*db).ReparseDataLength =
-                    (*db).ReparseTargetLength as DWORD + 12;
+            (*db).ReparseDataLength = (*db).ReparseTargetLength as DWORD + 12;
 
             let mut ret = 0;
-            let res = DeviceIoControl(h as *mut _,
-                                      FSCTL_SET_REPARSE_POINT,
-                                      data.as_ptr() as *mut _,
-                                      (*db).ReparseDataLength + 8,
-                                      ptr::null_mut(), 0,
-                                      &mut ret,
-                                      ptr::null_mut());
+            let res = DeviceIoControl(
+                h as *mut _,
+                FSCTL_SET_REPARSE_POINT,
+                data.as_ptr() as *mut _,
+                (*db).ReparseDataLength + 8,
+                ptr::null_mut(),
+                0,
+                &mut ret,
+                ptr::null_mut(),
+            );
 
-            if res == 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
+            let out = if res == 0 { Err(io::Error::last_os_error()) } else { Ok(()) };
+            CloseHandle(h);
+            out
         }
-    }
-}
-
-/// An RAII structure that indicates all output until this instance is dropped
-/// is part of the same group.
-///
-/// On Travis CI, these output will be folded by default, together with the
-/// elapsed time in this block. This reduces noise from unnecessary logs,
-/// allowing developers to quickly identify the error.
-///
-/// Travis CI supports folding by printing `travis_fold:start:<name>` and
-/// `travis_fold:end:<name>` around the block. Time elapsed is recognized
-/// similarly with `travis_time:[start|end]:<name>`. These are undocumented, but
-/// can easily be deduced from source code of the [Travis build commands].
-///
-/// [Travis build commands]:
-/// https://github.com/travis-ci/travis-build/blob/f603c0089/lib/travis/build/templates/header.sh
-pub struct OutputFolder {
-    name: String,
-    start_time: SystemTime, // we need SystemTime to get the UNIX timestamp.
-}
-
-impl OutputFolder {
-    /// Creates a new output folder with the given group name.
-    pub fn new(name: String) -> OutputFolder {
-        // "\r" moves the cursor to the beginning of the line, and "\x1b[0K" is
-        // the ANSI escape code to clear from the cursor to end of line.
-        // Travis seems to have trouble when _not_ using "\r\x1b[0K", that will
-        // randomly put lines to the top of the webpage.
-        print!("travis_fold:start:{0}\r\x1b[0Ktravis_time:start:{0}\r\x1b[0K", name);
-        OutputFolder {
-            name,
-            start_time: SystemTime::now(),
-        }
-    }
-}
-
-impl Drop for OutputFolder {
-    fn drop(&mut self) {
-        use std::time::*;
-        use std::u64;
-
-        fn to_nanos(duration: Result<Duration, SystemTimeError>) -> u64 {
-            match duration {
-                Ok(d) => d.as_secs() * 1_000_000_000 + d.subsec_nanos() as u64,
-                Err(_) => u64::MAX,
-            }
-        }
-
-        let end_time = SystemTime::now();
-        let duration = end_time.duration_since(self.start_time);
-        let start = self.start_time.duration_since(UNIX_EPOCH);
-        let finish = end_time.duration_since(UNIX_EPOCH);
-        println!(
-            "travis_fold:end:{0}\r\x1b[0K\n\
-                travis_time:end:{0}:start={1},finish={2},duration={3}\r\x1b[0K",
-            self.name,
-            to_nanos(start),
-            to_nanos(finish),
-            to_nanos(duration)
-        );
-        io::stdout().flush().unwrap();
     }
 }
 
@@ -393,19 +255,19 @@ impl Drop for OutputFolder {
 pub enum CiEnv {
     /// Not a CI environment.
     None,
-    /// The Travis CI environment, for Linux (including Docker) and macOS builds.
-    Travis,
-    /// The AppVeyor environment, for Windows builds.
-    AppVeyor,
+    /// The Azure Pipelines environment, for Linux (including Docker), Windows, and macOS builds.
+    AzurePipelines,
+    /// The GitHub Actions environment, for Linux (including Docker), Windows and macOS builds.
+    GitHubActions,
 }
 
 impl CiEnv {
     /// Obtains the current CI environment.
     pub fn current() -> CiEnv {
-        if env::var("TRAVIS").ok().map_or(false, |e| &*e == "true") {
-            CiEnv::Travis
-        } else if env::var("APPVEYOR").ok().map_or(false, |e| &*e == "True") {
-            CiEnv::AppVeyor
+        if env::var("TF_BUILD").map_or(false, |e| e == "True") {
+            CiEnv::AzurePipelines
+        } else if env::var("GITHUB_ACTIONS").map_or(false, |e| e == "true") {
+            CiEnv::GitHubActions
         } else {
             CiEnv::None
         }
@@ -422,4 +284,33 @@ impl CiEnv {
             cmd.env("TERM", "xterm").args(&["--color", "always"]);
         }
     }
+}
+
+pub fn forcing_clang_based_tests() -> bool {
+    if let Some(var) = env::var_os("RUSTBUILD_FORCE_CLANG_BASED_TESTS") {
+        match &var.to_string_lossy().to_lowercase()[..] {
+            "1" | "yes" | "on" => true,
+            "0" | "no" | "off" => false,
+            other => {
+                // Let's make sure typos don't go unnoticed
+                panic!(
+                    "Unrecognized option '{}' set in \
+                        RUSTBUILD_FORCE_CLANG_BASED_TESTS",
+                    other
+                )
+            }
+        }
+    } else {
+        false
+    }
+}
+
+pub fn use_host_linker(target: &Interned<String>) -> bool {
+    // FIXME: this information should be gotten by checking the linker flavor
+    // of the rustc target
+    !(target.contains("emscripten")
+        || target.contains("wasm32")
+        || target.contains("nvptx")
+        || target.contains("fortanix")
+        || target.contains("fuchsia"))
 }
